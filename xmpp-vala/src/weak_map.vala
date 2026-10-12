@@ -18,16 +18,21 @@ public class WeakMap<K, V> : Gee.AbstractMap<K, V> {
         this.key_equal_func = (owned)key_equal_func;
         this.value_equal_func = (owned)value_equal_func;
 
-        if (this.key_equal_func == null || this.key_equal_func == null || this.value_equal_func == null) {
-            hash_map = new HashMap<K, weak V>();
-            notify_map = new HashMap<K, WeakNotifyWrapper>();
-        } else {
-            hash_map = new HashMap<K, weak V>((v) => { return this.key_hash_func != null ? this.key_hash_func(v) : 0; },
-                    (a, b) => { return this.key_equal_func != null ? this.key_equal_func(a, b) : a == b; },
-                    (a, b) => { return this.value_equal_func != null ? this.value_equal_func(a, b) : a == b; });
-            notify_map = new HashMap<K, WeakNotifyWrapper>((v) => { return this.key_hash_func != null ? this.key_hash_func(v) : 0; },
-                    (a, b) => { return this.key_equal_func != null ? this.key_equal_func(a, b) : a == b; });
-        }
+        initialize_maps<K, V>(this);
+    }
+
+    // Static helpers avoid Vala capturing the instance for generic type metadata.
+    private static void initialize_maps<K, V>(WeakMap<K, V> map) {
+        weak WeakMap<K, V> self = map;
+        HashDataFunc<K>? hash_func = null;
+        EqualDataFunc<K>? key_equal = null;
+        EqualDataFunc<V>? value_equal = null;
+        if (self.key_hash_func != null) hash_func = key => self.key_hash_func(key);
+        if (self.key_equal_func != null) key_equal = (a, b) => self.key_equal_func(a, b);
+        if (self.value_equal_func != null) value_equal = (a, b) => self.value_equal_func(a, b);
+        self.hash_map = new HashMap<K, weak V>((owned) hash_func, (owned) key_equal, (owned) value_equal);
+        self.notify_map = new HashMap<K, WeakNotifyWrapper>(
+            key => self.hash_map.key_hash_func(key), (a, b) => self.hash_map.key_equal_func(a, b));
     }
 
     public override void clear() {
@@ -65,14 +70,19 @@ public class WeakMap<K, V> : Gee.AbstractMap<K, V> {
         unset(key);
 
         Object v_obj = (Object) value;
-        var notify_wrap = new WeakNotifyWrapper((obj) => {
-            hash_map.unset(key);
-            notify_map.unset(key);
-        });
+        var notify_wrap = create_notify<K, V>(this, key);
         notify_map[key] = notify_wrap;
         v_obj.weak_ref(notify_wrap.func);
 
         hash_map[key] = value;
+    }
+
+    private static WeakNotifyWrapper create_notify<K, V>(WeakMap<K, V> map, K key) {
+        weak WeakMap<K, V> self = map;
+        return new WeakNotifyWrapper((obj) => {
+            self.hash_map.unset(key);
+            self.notify_map.unset(key);
+        });
     }
 
     public override bool unset(K key, out V value = null) {
@@ -103,10 +113,8 @@ public class WeakMap<K, V> : Gee.AbstractMap<K, V> {
     }
 
     public override void dispose() {
-        foreach (K key in notify_map.keys) {
-            Object o = (Object) hash_map[key];
-            o.weak_unref(notify_map[key].func);
-        }
+        clear();
+        base.dispose();
     }
 }
 
