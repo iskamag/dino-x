@@ -21,6 +21,7 @@ public class ConversationViewController : Object {
     private Conversation? conversation;
 
     private Binding? display_name_binding = null;
+    private uint file_upload_status_generation = 0;
 
     private const string[] KEY_COMBINATION_CLOSE_CONVERSATION = {"<Ctrl>W", null};
 
@@ -109,7 +110,7 @@ public class ConversationViewController : Object {
 
     public void select_conversation(Conversation? conversation, bool default_initialize_conversation) {
         if (this.conversation != null) {
-            conversation.notify["encryption"].disconnect(update_file_upload_status);
+            this.conversation.notify["encryption"].disconnect(update_file_upload_status);
         }
 
         this.conversation = conversation;
@@ -148,9 +149,13 @@ public class ConversationViewController : Object {
     }
 
     private async void update_file_upload_status() {
+        uint generation = ++file_upload_status_generation;
         if (conversation == null) return;
 
-        bool upload_available = yield stream_interactor.get_module(FileManager.IDENTITY).is_upload_available(conversation);
+        Conversation checked_conversation = conversation;
+        bool upload_available = yield stream_interactor.get_module(FileManager.IDENTITY).is_upload_available(checked_conversation);
+        // A newer check may finish first, including after switching conversations.
+        if (generation != file_upload_status_generation || conversation != checked_conversation) return;
         chat_input_controller.set_file_upload_active(upload_available);
 
         if (upload_available) {
