@@ -83,22 +83,24 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
         if (!show_skeleton) return;
 
         update_name_label();
-//            name_label.style_updated.connect(update_name_label);
+        // Headers can be shown repeatedly when adjacent messages change.
+        // Register once so dispose can disconnect every roster callback.
+        if (updated_roster_handler_id == 0) {
             updated_roster_handler_id = stream_interactor.get_module(RosterManager.IDENTITY).updated_roster_item.connect((account, jid, roster_item) => {
-            if (this.conversation.account.equals(account) && this.conversation.counterpart.equals(jid)) {
-                update_name_label();
-            }
-        });
-
-        item.notify["encryption"].connect(update_encryption_icon);
+                if (this.conversation.account.equals(account) && this.conversation.counterpart.equals(jid)) {
+                    update_name_label();
+                }
+            });
+            item.notify["encryption"].connect(update_encryption_icon);
+            item.bind_property("mark", this, "item-mark", BindingFlags.SYNC_CREATE);
+            this.notify["item-mark"].connect_after(update_received_mark);
+        }
         update_encryption_icon();
 
         if (item.time != null) {
             update_time();
         }
 
-        item.bind_property("mark", this, "item-mark", BindingFlags.SYNC_CREATE);
-        this.notify["item-mark"].connect_after(update_received_mark);
         update_received_mark();
     }
 
@@ -178,10 +180,15 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
     }
 
     private void on_time_update_timeout() {
+        time_update_timeout = 0;
         if (main_grid.parent != null) update_time();
     }
 
     private void update_time() {
+        if (time_update_timeout != 0) {
+            Source.remove(time_update_timeout);
+            time_update_timeout = 0;
+        }
         time_label.label = get_relative_time(item.time.to_local()).to_string();
 
         time_update_timeout = Dino.WeakTimeout.add_seconds_once((int) get_next_time_change(item.time), this, on_time_update_timeout);
