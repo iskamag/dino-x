@@ -83,7 +83,12 @@ class Dino.Ui.FixedRatioPicture : Gtk.Widget {
     }
 
     public override void dispose() {
-        inner.unparent();
+        if (inner != null) {
+            inner.paintable = null;
+            inner.file = null;
+            if (inner.parent != null) inner.unparent();
+            inner = null;
+        }
         base.dispose();
     }
 }

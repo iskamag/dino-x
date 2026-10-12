@@ -864,6 +864,13 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
     }
 
     private void clear() {
+        scroll_active = false;
+        scroll_target_item = null;
+        currently_highlighted = null;
+        current_meta_item = null;
+        message_actions = null;
+        message_menu_box.visible = false;
+        last_y = -1;
         if (mark_lowest_message_read_timeout != 0) {
             Source.remove(mark_lowest_message_read_timeout);
             mark_lowest_message_read_timeout = 0;

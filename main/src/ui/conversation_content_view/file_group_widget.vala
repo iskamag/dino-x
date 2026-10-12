@@ -107,6 +107,25 @@ namespace Dino.Ui {
                 this.append(box);
             }
         }
+
+        private static void dispose_images(Widget widget) {
+            if (widget is FileImageWidget) {
+                if (widget.parent != null) widget.unparent();
+                widget.dispose();
+                return;
+            }
+            Widget? child = widget.get_first_child();
+            while (child != null) {
+                Widget? next = child.get_next_sibling();
+                dispose_images(child);
+                child = next;
+            }
+        }
+
+        public override void dispose() {
+            dispose_images(this);
+            base.dispose();
+        }
     }
 
     public static bool all_files_images(Gee.ArrayList<FileTransfer> file_transfers) {

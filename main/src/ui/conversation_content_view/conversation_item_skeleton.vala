@@ -313,7 +313,12 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
             received_image.dispose();
             received_image = null;
         }
+        foreach (var content_widget in content_widgets.values) {
+            if (content_widget.parent != null) content_widget.unparent();
+            content_widget.dispose();
+        }
         content_widgets.clear();
+        widget = null;
         base.dispose();
     }
 }

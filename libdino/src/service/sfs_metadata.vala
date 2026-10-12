@@ -45,7 +45,8 @@ namespace Dino {
         private const string MIME_TYPE = "image/png";
 
         public async void fill_metadata(File file, Xep.FileMetadataElement.FileMetadata metadata) {
-            Pixbuf pixbuf = new Pixbuf.from_stream(yield file.read_async());
+            var preview = yield ImagePreview.load(file, int.MAX, int.MAX);
+            Pixbuf pixbuf = preview.pixbuf;
             metadata.width = pixbuf.get_width();
             metadata.height = pixbuf.get_height();
             float ratio = (float)metadata.width / (float) metadata.height;

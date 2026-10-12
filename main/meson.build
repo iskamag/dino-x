@@ -13,7 +13,6 @@ dependencies = [
     meson.get_compiler('vala').find_library('posix'),
 ]
 sources = files(
-    'src/main.vala',
     'src/ui/add_conversation/add_conference_dialog.vala',
     'src/ui/add_conversation/add_contact_dialog.vala',
     'src/ui/add_conversation/add_groupchat_dialog.vala',
@@ -142,7 +141,18 @@ endif
 if meson.get_compiler('vala').version().version_compare('=0.56.12')
     vala_args += ['-D', 'VALA_0_56_12']
 endif
-exe_dino = executable('dino', sources, c_args: c_args, vala_args: vala_args, dependencies: dependencies, install: true, install_rpath: default_install_rpath)
+exe_dino = executable('dino', files('src/main.vala') + sources, c_args: c_args, vala_args: vala_args, dependencies: dependencies, install: true, install_rpath: default_install_rpath)
+
+exe_image_preview_test = executable('image-preview-test', sources + files('tests/image_preview.vala'),
+    c_args: c_args, vala_args: vala_args, dependencies: dependencies, install: false)
+preview_test_args = [meson.current_source_dir() / 'tests' / 'data']
+preview_test_env = ['GTK_A11Y=none', 'GSK_RENDERER=cairo']
+prog_xvfb = find_program('xvfb-run', required: false)
+if prog_xvfb.found()
+    test('Image previews', prog_xvfb, args: ['-a', exe_image_preview_test] + preview_test_args, env: preview_test_env)
+else
+    test('Image previews', exe_image_preview_test, args: preview_test_args, env: preview_test_env)
+endif
 
 install_data('data/icons/scalable/apps/im.dino.Dino-symbolic.svg', install_dir: get_option('datadir') / 'icons/hicolor/symbolic/apps')
 install_data('data/icons/scalable/apps/im.dino.Dino.svg', install_dir: get_option('datadir') / 'icons/hicolor/scalable/apps')

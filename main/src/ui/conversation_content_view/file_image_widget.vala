@@ -21,6 +21,11 @@ public class FileImageWidget : Widget {
     private bool show_image_overlay_toolbar = false;
     private Gtk.Box image_overlay_toolbar = new Gtk.Box(Orientation.VERTICAL, 0) { halign=Align.END, valign=Align.START, margin_top=10, margin_start=10, margin_end=10, margin_bottom=10, vexpand=false, visible=false };
     private Label file_size_label = new Label(null) { halign=Align.START, valign=Align.END, margin_bottom=4, margin_start=4, visible=false };
+    private Label animation_label = new Label(null) { halign=Align.START, valign=Align.START, margin_top=8, margin_start=8, visible=false, can_target=false };
+    private FixedRatioPicture? current_picture;
+    private Cancellable preview_cancellable = new Cancellable();
+    private bool disposed = false;
+    private uint progress_timeout = 0;
 
     private int size = -1;
 
@@ -41,6 +46,8 @@ public class FileImageWidget : Widget {
         overlay.set_child(stack);
         overlay.set_measure_overlay(stack, true);
         overlay.add_overlay(file_size_label);
+        animation_label.add_css_class("file-details");
+        overlay.add_overlay(animation_label);
         overlay.add_overlay(transmission_progress);
         overlay.add_overlay(image_overlay_toolbar);
         overlay.set_clip_overlay(image_overlay_toolbar, true);
@@ -134,7 +141,13 @@ public class FileImageWidget : Widget {
 
     private void refresh_state() {
         if ((state == EMPTY || state == PREVIEW) && file_transfer.path != null) {
-            load_from_file.begin(file_transfer.get_file(), file_transfer.file_name);
+            load_from_file.begin(file_transfer.get_file(), file_transfer.file_name, (obj, result) => {
+                try {
+                    load_from_file.end(result);
+                } catch (Error e) {
+                    if (!(e is IOError.CANCELLED)) warning("Can't load image %s: %s", file_transfer.file_name, e.message);
+                }
+            });
             show_image_overlay_toolbar = true;
             this.set_cursor_from_name("zoom-in");
 
@@ -152,12 +165,8 @@ public class FileImageWidget : Widget {
             transmission_progress.visible = true;
             show_image_overlay_toolbar = false;
         } else if (transmission_progress.visible) {
-            Timeout.add(250, () => {
-                transmission_progress.transferred_size = transmission_progress.file_size;
-                transmission_progress.visible = false;
-                show_image_overlay_toolbar = true;
-                return false;
-            });
+            if (progress_timeout != 0) Source.remove(progress_timeout);
+            progress_timeout = WeakTimeout.add_once(250, this, on_progress_timeout);
         }
 
         if (file_transfer.direction == FileTransfer.DIRECTION_RECEIVED) {
@@ -179,26 +188,21 @@ public class FileImageWidget : Widget {
         }
     }
 
+    private static void on_progress_timeout(FileImageWidget widget) {
+        widget.progress_timeout = 0;
+        widget.transmission_progress.transferred_size = widget.transmission_progress.file_size;
+        widget.transmission_progress.visible = false;
+        widget.show_image_overlay_toolbar = true;
+    }
+
     public async void load_from_file(File file, string file_name) throws GLib.Error {
-        FixedRatioPicture image = create_picture();
-
-        FileInputStream file_stream = null;
-        try {
-            file_stream = file.read();
-            // Work-around because Gtk.Picture does not apply the orientation itself
-            Gdk.Pixbuf? pixbuf = new Pixbuf.from_stream(file_stream);
-            pixbuf = pixbuf.apply_embedded_orientation();
-            image.paintable = Texture.for_pixbuf(pixbuf);
-        } finally {
-            try {
-                if (file_stream != null) file_stream.close();
-            } catch (Error e) {
-                // Ignore
-            }
-        }
-
-        stack.add_child(image);
-        stack.set_visible_child(image);
+        int scale = get_scale_factor();
+        var preview = yield ImagePreview.load(file, (size == -1 ? 600 : size) * scale,
+            (size == -1 ? 300 : size) * scale, preview_cancellable);
+        if (disposed) return;
+        set_picture(preview.pixbuf);
+        animation_label.label = preview.animation_format;
+        animation_label.visible = preview.animation_format != null;
     }
 
     public async void load_from_thumbnail(FileTransfer file_transfer) throws GLib.Error {
@@ -219,7 +223,9 @@ public class FileImageWidget : Widget {
         pixbuf = pixbuf.apply_embedded_orientation();
 
         if (file_transfer.width > 0 && file_transfer.height > 0) {
-            pixbuf = pixbuf.scale_simple(file_transfer.width, file_transfer.height, InterpType.BILINEAR);
+            double scale = double.min(1, double.min(600.0 / file_transfer.width, 300.0 / file_transfer.height));
+            pixbuf = pixbuf.scale_simple(int.max(1, (int) (file_transfer.width * scale)),
+                int.max(1, (int) (file_transfer.height * scale)), InterpType.BILINEAR);
         } else {
             warning("Preview: Not scaling image, width: %d, height: %d\n", file_transfer.width, file_transfer.height);
         }
@@ -228,10 +234,25 @@ public class FileImageWidget : Widget {
             throw new Error(-1, 0, "Error scaling preview image");
         }
 
-        FixedRatioPicture image = create_picture();
+        if (disposed) return;
+        set_picture(pixbuf);
+    }
+
+    private void set_picture(Pixbuf pixbuf) {
+        clear_picture();
+        var image = create_picture();
         image.paintable = Texture.for_pixbuf(pixbuf);
         stack.add_child(image);
         stack.set_visible_child(image);
+        current_picture = image;
+    }
+
+    private void clear_picture() {
+        if (current_picture == null) return;
+        current_picture.paintable = null;
+        stack.remove(current_picture);
+        current_picture.dispose();
+        current_picture = null;
     }
 
     public void on_image_clicked(GestureClick gesture_click_controller, int n_press, double x, double y) {
@@ -254,9 +275,9 @@ public class FileImageWidget : Widget {
         }
     }
 
-    public static Pixbuf? parse_thumbnail(Xep.JingleContentThumbnails.Thumbnail thumbnail) {
+    public static Pixbuf? parse_thumbnail(Xep.JingleContentThumbnails.Thumbnail thumbnail) throws Error {
         MemoryInputStream input_stream = new MemoryInputStream.from_data(thumbnail.data.get_data());
-        return new Pixbuf.from_stream(input_stream);
+        return ImagePreview.decode(input_stream, 600, 300).pixbuf;
     }
 
     public static bool can_display(FileTransfer file_transfer) {
@@ -279,6 +300,17 @@ public class FileImageWidget : Widget {
     }
 
     public override void dispose() {
+        disposed = true;
+        preview_cancellable.cancel();
+        if (progress_timeout != 0) {
+            Source.remove(progress_timeout);
+            progress_timeout = 0;
+        }
+        if (file_transfer != null) {
+            file_transfer.notify["state"].disconnect(refresh_state);
+            file_transfer.sources_changed.disconnect(refresh_state);
+        }
+        clear_picture();
         if (overlay != null && overlay.parent != null) overlay.unparent();
         base.dispose();
     }
