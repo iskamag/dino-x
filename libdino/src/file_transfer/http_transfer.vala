@@ -155,7 +155,7 @@ namespace Dino {
             head_message.accept_certificate.connect((peer_cert, errors) => { return ConnectionManager.on_invalid_certificate(transfer_host, peer_cert, errors); });
 
             try {
-                yield session.send_async(head_message, GLib.Priority.LOW, null);
+                yield session.send_async(head_message, GLib.Priority.LOW, file_transfer.cancellable);
             } catch (Error e) {
                 throw new FileReceiveError.GET_METADATA_FAILED("HEAD request failed");
             }

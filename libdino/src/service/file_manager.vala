@@ -243,11 +243,17 @@ public class FileManager : StreamInteractionModule, Object {
     }
 
     private async void download_file_internal(FileProvider file_provider, FileTransfer file_transfer, Conversation conversation) {
+        // Keep the attempt active during metadata requests as well as the download.
+        // A second activation must not reset the cancellable of a pending attempt.
+        if (file_transfer.state == FileTransfer.State.IN_PROGRESS) return;
+        file_transfer.cancellable.reset();
+        file_transfer.state = FileTransfer.State.IN_PROGRESS;
         try {
             // Get meta info
             FileReceiveData? receive_data = file_provider.get_file_receive_data(file_transfer);
             if (receive_data == null) {
                 warning("Don't have download data (yet)");
+                file_transfer.state = FileTransfer.State.NOT_STARTED;
                 return;
             }
             FileDecryptor? file_decryptor = null;
@@ -265,8 +271,6 @@ public class FileManager : StreamInteractionModule, Object {
             FileMeta file_meta = yield get_file_meta(file_provider, file_transfer, conversation, receive_data);
 
             // Download and decrypt file
-            file_transfer.state = FileTransfer.State.IN_PROGRESS;
-
             if (file_decryptor != null) {
                 file_meta = file_decryptor.prepare_download_file(conversation, file_transfer, receive_data, file_meta);
             }
@@ -332,7 +336,8 @@ public class FileManager : StreamInteractionModule, Object {
 
             file_transfer.state = FileTransfer.State.COMPLETE;
         } catch (IOError.CANCELLED e) {
-            print("cancelled\n");
+            file_transfer.state = file_transfer.provider == HTTP_PROVIDER_ID || file_transfer.provider == SFS_PROVIDER_ID
+                ? FileTransfer.State.NOT_STARTED : FileTransfer.State.FAILED;
         } catch (Error e) {
             warning("Error downloading file: %s", e.message);
             if (file_transfer.provider == 0 || file_transfer.provider == FileManager.SFS_PROVIDER_ID) {
