@@ -13,19 +13,24 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     public string? session_id { get; set; default=null; }
     public Gee.List<XmppStreamFlag> flags = null;
     private HashMap<int, QueueItem> in_flight_stanzas = new HashMap<int, QueueItem>();
+    private uint64 queue_sequence = 0;
+    private Gee.Queue<QueueItem> resend_queue = new LinkedList<QueueItem>();
     private Gee.Queue<QueueItem> node_queue = new PriorityQueue<QueueItem>((a, b) => {
-        return a.io_priority - b.io_priority;
+        if (a.io_priority != b.io_priority) return a.io_priority < b.io_priority ? -1 : 1;
+        return a.sequence < b.sequence ? -1 : (a.sequence > b.sequence ? 1 : 0);
     });
 
     private class QueueItem {
         public StanzaNode node;
         public int io_priority;
+        public uint64 sequence;
         public Cancellable? cancellable;
         public Promise<void*> promise;
 
-        public QueueItem(StanzaNode node, int io_priority, Cancellable? cancellable) {
+        public QueueItem(StanzaNode node, int io_priority, Cancellable? cancellable, uint64 sequence) {
             this.node = node;
             this.io_priority = io_priority;
+            this.sequence = sequence;
             this.cancellable = cancellable;
             this.promise = new Promise<void*>();
         }
@@ -51,7 +56,7 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     }
 
     private Future<void*> enqueue_stanza(XmppStream stream, StanzaNode node, int io_priority, Cancellable? cancellable) {
-        var queue_item = new QueueItem(node, io_priority, cancellable);
+        var queue_item = new QueueItem(node, io_priority, cancellable, queue_sequence++);
         node_queue.offer(queue_item);
         check_queue(stream);
         return queue_item.promise.future;
@@ -73,8 +78,8 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     }
 
     private void check_queue(XmppStream stream) {
-        while (!node_queue.is_empty && in_flight_stanzas.size < 10) {
-            QueueItem queue_item = node_queue.poll();
+        while ((!resend_queue.is_empty || !node_queue.is_empty) && in_flight_stanzas.size < 10) {
+            QueueItem queue_item = !resend_queue.is_empty ? resend_queue.poll() : node_queue.poll();
             try {
                 queue_item.cancellable.set_error_if_cancelled();
             } catch (IOError e) {
@@ -178,8 +183,13 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
 
         h_outbound = int.parse(resumed_node.get_attribute("h", NS_URI));
         handle_incoming_h(stream, h_outbound);
-        foreach (var id in in_flight_stanzas.keys) {
-            node_queue.add(in_flight_stanzas[id]);
+        // Previously transmitted stanzas retain their wire order and must precede
+        // new queued stanzas, regardless of their original I/O priorities.
+        var unacked_ids = new ArrayList<int>();
+        unacked_ids.add_all(in_flight_stanzas.keys);
+        unacked_ids.sort((a, b) => a < b ? -1 : (a > b ? 1 : 0));
+        foreach (var id in unacked_ids) {
+            resend_queue.offer(in_flight_stanzas[id]);
         }
         in_flight_stanzas.clear();
         check_queue(stream);
