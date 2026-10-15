@@ -60,7 +60,9 @@ public abstract class Xmpp.IoXmppStream : XmppStream {
 
     public override async void write_async(StanzaNode node, int io_priority = Priority.DEFAULT, Cancellable? cancellable = null) throws IOError {
         if (write_obj != null) {
-            yield write_obj.write_stanza(this, node, io_priority, cancellable ?? this.cancellable);
+            // Queued stanzas may survive this connection through stream resumption.
+            // Keep only an explicit operation cancellation token on the queue item.
+            yield write_obj.write_stanza(this, node, io_priority, cancellable);
         } else {
             StanzaWriter? writer = this.writer;
             if (writer == null) throw new IOError.NOT_CONNECTED("trying to write, but no stream open");
