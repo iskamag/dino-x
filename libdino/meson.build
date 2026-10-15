@@ -102,5 +102,9 @@ endif
 lib_dino = library('libdino', sources, c_args: c_args, vala_args: vala_args, include_directories: include_directories('src'), dependencies: dependencies, name_prefix: '', version: '0.0', install: true, install_dir: [true, true, true], install_rpath: default_install_rpath)
 dep_dino = declare_dependency(link_with: lib_dino, include_directories: include_directories('.', 'src'), dependencies: dep_gdk_pixbuf)
 
+exe_file_transfer_test = executable('file-transfer-test', files('tests/file_transfer.vala'),
+    dependencies: [dep_dino, dep_gee, dep_glib, dep_gio, dep_gmodule, dep_qlite, dep_xmpp_vala, dep_libsoup], install: false)
+test('File transfers', exe_file_transfer_test)
+
 install_data('dino.deps', install_dir: get_option('datadir') / 'vala/vapi', install_tag: 'devel') # TODO: workaround for https://github.com/mesonbuild/meson/issues/9756
 install_headers('src/dino_i18n.h')
