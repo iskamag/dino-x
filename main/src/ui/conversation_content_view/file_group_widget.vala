@@ -44,10 +44,7 @@ namespace Dino.Ui {
 
     public class ImageGroupWidget : Box {
 
-        private Gee.ArrayList<FileTransfer> file_transfers;
-
         public ImageGroupWidget(Gee.ArrayList<FileTransfer> file_transfers) {
-            this.file_transfers = file_transfers;
 
             if (file_transfers.size == 3) {
                 Box box = new Box(Orientation.HORIZONTAL, 4) {
@@ -75,34 +72,15 @@ namespace Dino.Ui {
                 };
                 box.add_css_class("image-group");
 
-                Box row_upper_row = new Box(Orientation.HORIZONTAL, 4);
-
-                var picture1 = new FileImageWidget.from_file_transfer(file_transfers[0], 150);
-                row_upper_row.append(picture1);
-
-                var picture2 = new FileImageWidget.from_file_transfer(file_transfers[1], 150);
-                row_upper_row.append(picture2);
-                box.append(row_upper_row);
-
-                if (file_transfers.size >= 4) {
-
-                    int size = 150;
-                    if (file_transfers.size == 5) size = 99;
-
-                    Box row_lower_row = new Box(Orientation.HORIZONTAL, 4);
-
-                    var picture3 = new FileImageWidget.from_file_transfer(file_transfers[2], size);
-                    row_lower_row.append(picture3);
-
-                    var picture4 = new FileImageWidget.from_file_transfer(file_transfers[3], size);
-                    row_lower_row.append(picture4);
-
-                    if (file_transfers.size == 5) {
-                        var picture5 = new FileImageWidget.from_file_transfer(file_transfers[4], size);
-                        row_lower_row.append(picture5);
+                for (int start = 0; start < file_transfers.size;) {
+                    // Preserve the three smaller images in the five-image layout.
+                    int columns = file_transfers.size == 5 && start == 2 ? 3 : 2;
+                    int size = columns == 3 ? 99 : 150;
+                    Box row = new Box(Orientation.HORIZONTAL, 4);
+                    for (int column = 0; column < columns && start < file_transfers.size; column++, start++) {
+                        row.append(new FileImageWidget.from_file_transfer(file_transfers[start], size));
                     }
-
-                    box.append(row_lower_row);
+                    box.append(row);
                 }
                 this.append(box);
             }
