@@ -96,7 +96,7 @@ public class Database : Qlite.Database {
     }
 
     public RowOption get_contact_key_row(Jid jid) {
-        return contact_key_table.select({contact_key_table.key})
+        return contact_key_table.select({contact_key_table.key, contact_key_table.sig, contact_key_table.signed_data})
                 .with(contact_key_table.jid, "=", jid.to_string()).row();
     }
 
