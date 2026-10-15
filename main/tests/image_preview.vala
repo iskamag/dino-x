@@ -288,6 +288,7 @@ int main(string[] args) {
     GLib.Test.add_func("/preview/replacement", test_preview_replacement);
     GLib.Test.add_func("/preview/conversation-switch", test_conversation_switch);
     GLib.Test.add_func("/preview/grouped-images", test_grouped_images);
+    add_regression_tests();
     return GLib.Test.run();
 }
 

@@ -143,7 +143,7 @@ if meson.get_compiler('vala').version().version_compare('=0.56.12')
 endif
 exe_dino = executable('dino', files('src/main.vala') + sources, c_args: c_args, vala_args: vala_args, dependencies: dependencies, install: true, install_rpath: default_install_rpath)
 
-exe_image_preview_test = executable('image-preview-test', sources + files('tests/image_preview.vala'),
+exe_image_preview_test = executable('image-preview-test', sources + files('tests/image_preview.vala', 'tests/regressions.vala'),
     c_args: c_args, vala_args: vala_args, dependencies: dependencies, install: false)
 preview_test_args = [meson.current_source_dir() / 'tests' / 'data']
 preview_test_env = ['GTK_A11Y=none', 'GSK_RENDERER=cairo']
