@@ -519,7 +519,7 @@ namespace Dino {
                 // TODO prevent other MUC occupants from retracting a call
 
                 call_state.call.state = Call.State.MISSED;
-                remove_call_from_datastructures(call_state.call);
+                call_state.terminated(from_jid, Xep.Jingle.ReasonElement.CANCEL, "Call invite retracted");
             });
             call_invites_module.call_rejected.connect((from_jid, to_jid, call_id, message_type) => {
                 // We rejected an invite from another device
@@ -528,6 +528,7 @@ namespace Dino {
                     if (call_state == null) return;
                     Call call = call_state.call;
                     call.state = Call.State.DECLINED;
+                    call_state.terminated(from_jid, Xep.Jingle.ReasonElement.DECLINE, "Call invite rejected on another device");
                 }
 
                 if (from_jid.equals_bare(account.bare_jid)) return;
