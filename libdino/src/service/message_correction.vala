@@ -19,7 +19,6 @@ public class MessageCorrection : StreamInteractionModule, MessageListener {
     public HashMap<Conversation, Gee.List<ContentItem>> unmatched_corrections = new HashMap<Conversation, Gee.List<ContentItem>>(Conversation.hash_func, Conversation.equals_func);
 
     private HashMap<Conversation, HashMap<Jid, Message>> last_messages = new HashMap<Conversation, HashMap<Jid, Message>>(Conversation.hash_func, Conversation.equals_func);
-    private HashMap<string, string> outstanding_correction_nodes = new HashMap<string, string>();
 
     public static void start(StreamInteractor stream_interactor, Database db) {
         MessageCorrection m = new MessageCorrection(stream_interactor, db);
@@ -44,7 +43,7 @@ public class MessageCorrection : StreamInteractionModule, MessageListener {
     public void set_correction(Conversation conversation, Message message, Message old_message) {
         string reference_stanza_id = old_message.edit_to ?? old_message.stanza_id;
 
-        outstanding_correction_nodes[message.stanza_id] = reference_stanza_id;
+        message.edit_to = reference_stanza_id;
 
         db.message_correction.insert()
                 .value(db.message_correction.message_id, message.id)
@@ -77,9 +76,8 @@ public class MessageCorrection : StreamInteractionModule, MessageListener {
     }
 
     private void check_add_correction_node(Entities.Message message, Xmpp.MessageStanza message_stanza, Conversation conversation) {
-        if (outstanding_correction_nodes.has_key(message.stanza_id)) {
-            LastMessageCorrection.set_replace_id(message_stanza, outstanding_correction_nodes[message.stanza_id]);
-            outstanding_correction_nodes.unset(message.stanza_id);
+        if (message.edit_to != null) {
+            LastMessageCorrection.set_replace_id(message_stanza, message.edit_to);
         } else {
             if (!last_messages.has_key(conversation)) {
                 last_messages[conversation] = new HashMap<Jid, Message>(Jid.hash_func, Jid.equals_func);
