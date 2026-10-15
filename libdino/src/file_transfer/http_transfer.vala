@@ -72,6 +72,10 @@ namespace Dino {
             string transfer_host = Uri.parse(receive_data.url, UriFlags.NONE).get_host();
             get_message.accept_certificate.connect((peer_cert, errors) => { return ConnectionManager.on_invalid_certificate(transfer_host, peer_cert, errors); });
             InputStream stream = yield session.send_async(get_message, GLib.Priority.LOW, file_transfer.cancellable);
+            if (get_message.status_code < 200 || get_message.status_code >= 300) {
+                yield stream.close_async(GLib.Priority.LOW, null);
+                throw new IOError.FAILED("HTTP download failed: status code %u".printf(get_message.status_code));
+            }
 
             if (file_size != -1) {
                 return new LimitInputStream(stream, file_size);
@@ -158,6 +162,10 @@ namespace Dino {
                 yield session.send_async(head_message, GLib.Priority.LOW, file_transfer.cancellable);
             } catch (Error e) {
                 throw new FileReceiveError.GET_METADATA_FAILED("HEAD request failed");
+            }
+
+            if (head_message.status_code < 200 || head_message.status_code >= 300) {
+                throw new FileReceiveError.GET_METADATA_FAILED("HTTP metadata request failed: status code %u".printf(head_message.status_code));
             }
 
             string? content_type = null, content_length = null;
