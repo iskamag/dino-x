@@ -85,7 +85,7 @@ public class FileImageWidget : Widget {
             Dino.Application.get_default().activate_action("file_start_download", new Variant.int32(file_transfer_id));
         });
         transmission_progress.cancel_transfer.connect(() => {
-            Dino.Application.get_default().activate_action("file_cancel_transfer", new Variant.int32(file_transfer_id));
+            Dino.Application.get_default().activate_action("file_cancel_download", new Variant.int32(file_transfer_id));
         });
     }
 
