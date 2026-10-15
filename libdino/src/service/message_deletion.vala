@@ -89,11 +89,12 @@ namespace Dino {
             if (delete_message_id == null) return false;
 
             ContentItem? content_item = stream_interactor.get_module(ContentItemStore.IDENTITY).get_content_item_for_referencing_id(conversation, delete_message_id);
-            if (content_item != null) {
+            if (content_item != null && stanza.from != null) {
+                bool allowed = is_removal_allowed(conversation, content_item, stanza.from);
                 debug("Deletion request: %s wants to remove message %s content item id %i. Allowed: %b",
                         message.from.to_string(), delete_message_id, content_item.id,
-                        is_removal_allowed(conversation, content_item, stanza.from));
-                delete_locally(conversation, content_item, stanza.from);
+                        allowed);
+                if (allowed) delete_locally(conversation, content_item, stanza.from);
             }
 
             return false;
