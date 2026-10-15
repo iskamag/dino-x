@@ -23,6 +23,8 @@ public class FileImageWidget : Widget {
     private Label file_size_label = new Label(null) { halign=Align.START, valign=Align.END, margin_bottom=4, margin_start=4, visible=false };
     private Label animation_label = new Label(null) { halign=Align.START, valign=Align.START, margin_top=8, margin_start=8, visible=false, can_target=false };
     private FixedRatioPicture? current_picture;
+    private FileDefaultWidget? fallback_widget;
+    private FileDefaultWidgetController? fallback_controller;
     private Cancellable preview_cancellable = new Cancellable();
     private bool disposed = false;
     private uint progress_timeout = 0;
@@ -131,7 +133,7 @@ public class FileImageWidget : Widget {
 
     private void on_motion_event_enter() {
         image_overlay_toolbar.visible = show_image_overlay_toolbar;
-        file_size_label.visible = file_transfer != null && file_transfer.direction == FileTransfer.DIRECTION_RECEIVED && file_transfer.state == FileTransfer.State.NOT_STARTED && !file_transfer.sfs_sources.is_empty;
+        file_size_label.visible = fallback_widget == null && file_transfer != null && file_transfer.direction == FileTransfer.DIRECTION_RECEIVED && file_transfer.state == FileTransfer.State.NOT_STARTED && !file_transfer.sfs_sources.is_empty;
     }
 
     private static bool file_size_label_transform(Binding binding, Value from_value, ref Value to_value) {
@@ -145,7 +147,7 @@ public class FileImageWidget : Widget {
                 try {
                     load_from_file.end(result);
                 } catch (Error e) {
-                    if (!(e is IOError.CANCELLED)) warning("Can't load image %s: %s", file_transfer.file_name, e.message);
+                    on_preview_error(e);
                 }
             });
             show_image_overlay_toolbar = true;
@@ -153,13 +155,21 @@ public class FileImageWidget : Widget {
 
             state = IMAGE;
         } else if (state == EMPTY && file_transfer.thumbnails.size > 0) {
-            load_from_thumbnail.begin(file_transfer);
+            load_from_thumbnail.begin(file_transfer, (obj, result) => {
+                try {
+                    load_from_thumbnail.end(result);
+                } catch (Error e) {
+                    on_preview_error(e);
+                }
+            });
 
             transmission_progress.visible = true;
             show_image_overlay_toolbar = false;
 
             state = PREVIEW;
         }
+
+        if (fallback_widget != null) return;
 
         if (file_transfer.state == IN_PROGRESS || file_transfer.state == NOT_STARTED || file_transfer.state == FAILED) {
             transmission_progress.visible = true;
@@ -203,6 +213,11 @@ public class FileImageWidget : Widget {
         set_picture(preview.pixbuf);
         animation_label.label = preview.animation_format;
         animation_label.visible = preview.animation_format != null;
+        if (file_transfer != null) {
+            show_image_overlay_toolbar = true;
+            this.set_cursor_from_name("zoom-in");
+            refresh_state();
+        }
     }
 
     public async void load_from_thumbnail(FileTransfer file_transfer) throws GLib.Error {
@@ -239,12 +254,45 @@ public class FileImageWidget : Widget {
     }
 
     private void set_picture(Pixbuf pixbuf) {
+        clear_fallback();
         clear_picture();
         var image = create_picture();
         image.paintable = Texture.for_pixbuf(pixbuf);
         stack.add_child(image);
         stack.set_visible_child(image);
         current_picture = image;
+    }
+
+    private void on_preview_error(Error error) {
+        if (disposed || error is IOError.CANCELLED) return;
+        debug("Can't load image %s: %s", file_transfer.file_name, error.message);
+        clear_picture();
+        if (fallback_widget == null) {
+            fallback_widget = new FileDefaultWidget();
+            fallback_controller = new FileDefaultWidgetController(fallback_widget);
+            fallback_controller.set_file_transfer(file_transfer);
+            stack.add_child(fallback_widget);
+        }
+        stack.visible_child = fallback_widget;
+        animation_label.visible = false;
+        file_size_label.visible = false;
+        transmission_progress.visible = false;
+        image_overlay_toolbar.visible = false;
+        show_image_overlay_toolbar = false;
+        this.set_cursor(null);
+        if (progress_timeout != 0) {
+            Source.remove(progress_timeout);
+            progress_timeout = 0;
+        }
+    }
+
+    private void clear_fallback() {
+        if (fallback_widget == null) return;
+        fallback_controller.dispose();
+        fallback_controller = null;
+        stack.remove(fallback_widget);
+        fallback_widget.dispose();
+        fallback_widget = null;
     }
 
     private void clear_picture() {
@@ -311,6 +359,7 @@ public class FileImageWidget : Widget {
             file_transfer.sources_changed.disconnect(refresh_state);
         }
         clear_picture();
+        clear_fallback();
         if (overlay != null && overlay.parent != null) overlay.unparent();
         base.dispose();
     }
