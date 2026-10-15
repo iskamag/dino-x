@@ -46,6 +46,10 @@ public class MessageStorage : StreamInteractionModule, Object {
                 .outer_join_with(db.reply, db.reply.message_id, db.message.id)
                 .limit(count);
 
+        if (conversation.counterpart.resourcepart != null) {
+            query.with(db.message.counterpart_resource, "=", conversation.counterpart.resourcepart);
+        }
+
         Gee.List<Message> ret = new LinkedList<Message>(Message.equals_func);
         foreach (Row row in query) {
             Message? message = messages_by_db_id[row[db.message.id]];
