@@ -28,6 +28,9 @@ public class MessageMetaItem : ContentMetaItem {
     ulong realize_id = -1;
     ulong marked_notify_handler_id = -1;
     uint pending_timeout_id = -1;
+    Message? observed_quote_message;
+    ulong quoted_item_notify_handler_id = 0;
+    int displayed_quote_id = -1;
 
     public Label label = new Label("") { use_markup=true, xalign=0, selectable=true, wrap=true, wrap_mode=Pango.WrapMode.WORD_CHAR, hexpand=true, vexpand=true };
 
@@ -70,6 +73,7 @@ public class MessageMetaItem : ContentMetaItem {
             });
         }
 
+        observe_quoted_item();
         update_label();
     }
 
@@ -179,8 +183,8 @@ public class MessageMetaItem : ContentMetaItem {
                 int time_diff = (- (int) message.time.difference(new DateTime.now_utc()) / 1000);
                 if (pending_timeout_id != -1) Source.remove(pending_timeout_id);
                 pending_timeout_id = Timeout.add(10000 - time_diff, () => {
-                    update_label();
                     pending_timeout_id = -1;
+                    update_label();
                     return false;
                 });
             }
@@ -197,6 +201,7 @@ public class MessageMetaItem : ContentMetaItem {
             realize_id = label.realize.connect(update_label);
         } else if (!theme_dependent && realize_id != -1) {
             label.disconnect(realize_id);
+            realize_id = -1;
         }
         label.label = markup_text;
     }
@@ -211,6 +216,28 @@ public class MessageMetaItem : ContentMetaItem {
         this.notify["in-edit-mode"].connect(on_in_edit_mode_changed);
 
         outer.set_widget(label, Plugins.WidgetType.GTK4, 2);
+        displayed_quote_id = -1;
+        update_quote();
+
+        return label;
+    }
+
+    private void observe_quoted_item() {
+        if (quoted_item_notify_handler_id != 0) {
+            observed_quote_message.disconnect(quoted_item_notify_handler_id);
+        }
+        observed_quote_message = message_item.message;
+        quoted_item_notify_handler_id = observed_quote_message.notify["quoted-item-id"].connect(on_quoted_item_changed);
+    }
+
+    private void on_quoted_item_changed() {
+        update_label();
+        update_quote();
+    }
+
+    private void update_quote() {
+        if (outer == null || displayed_quote_id == message_item.message.quoted_item_id) return;
+        displayed_quote_id = message_item.message.quoted_item_id;
 
         if (message_item.message.quoted_item_id > 0) {
             var quoted_content_item = stream_interactor.get_module(ContentItemStore.IDENTITY).get_item_by_id(message_item.conversation, message_item.message.quoted_item_id);
@@ -221,9 +248,10 @@ public class MessageMetaItem : ContentMetaItem {
                 });
                 var quote_widget = Quote.get_widget(quote_model);
                 outer.set_widget(quote_widget, Plugins.WidgetType.GTK4, 1);
+                return;
             }
         }
-        return label;
+        outer.set_widget(null, Plugins.WidgetType.GTK4, 1);
     }
 
     public override Gee.List<Plugins.MessageAction>? get_item_actions(Plugins.WidgetType type) {
@@ -291,7 +319,9 @@ public class MessageMetaItem : ContentMetaItem {
         if (this.content_item.id == content_item.id) {
             this.content_item = content_item;
             message_item = content_item as MessageItem;
+            observe_quoted_item();
             update_label();
+            update_quote();
         }
     }
 
@@ -304,23 +334,32 @@ public class MessageMetaItem : ContentMetaItem {
     }
 
     public override void dispose() {
+        if (quoted_item_notify_handler_id != 0) {
+            observed_quote_message.disconnect(quoted_item_notify_handler_id);
+            quoted_item_notify_handler_id = 0;
+            observed_quote_message = null;
+        }
         stream_interactor.get_module(MessageCorrection.IDENTITY).received_correction.disconnect(on_updated_item);
         stream_interactor.get_module(MessageDeletion.IDENTITY).item_deleted.disconnect(on_updated_item);
         this.notify["in-edit-mode"].disconnect(on_in_edit_mode_changed);
         if (marked_notify_handler_id != -1) {
             this.disconnect(marked_notify_handler_id);
+            marked_notify_handler_id = -1;
         }
         if (realize_id != -1) {
             label.disconnect(realize_id);
+            realize_id = -1;
         }
         if (pending_timeout_id != -1) {
             Source.remove(pending_timeout_id);
+            pending_timeout_id = -1;
         }
         if (label != null) {
             label.unparent();
             label.dispose();
             label = null;
         }
+        outer = null;
         base.dispose();
     }
 }

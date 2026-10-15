@@ -11,7 +11,6 @@ public class Dino.Replies : StreamInteractionModule, Object {
 
     private StreamInteractor stream_interactor;
     private Database db;
-    private HashMap<Conversation, HashMap<string, Gee.List<Message>>> unmapped_replies = new HashMap<Conversation, HashMap<string, Gee.List<Message>>>();
 
     private ReceivedMessageListener received_message_listener;
 
@@ -49,8 +48,12 @@ public class Dino.Replies : StreamInteractionModule, Object {
         reply_qry.join_with(db.message, db.reply.message_id, db.message.id)
                 .with(db.message.account_id, "=", conversation.account.id)
                 .with(db.message.counterpart_id, "=", db.get_jid_id(conversation.counterpart))
-                .with(db.message.time, ">", (long)message.time.to_unix())
+                .with(db.message.type_, "=", (int) Util.get_message_type_for_conversation(conversation))
                 .order_by(db.message.time, "DESC");
+
+        if (conversation.counterpart.resourcepart != null) {
+            reply_qry.with(db.message.counterpart_resource, "=", conversation.counterpart.resourcepart);
+        }
 
         foreach (Row reply_row in reply_qry) {
             ContentItem? message_item = stream_interactor.get_module(ContentItemStore.IDENTITY).get_item_by_foreign(conversation, 1, message.id);
@@ -65,7 +68,16 @@ public class Dino.Replies : StreamInteractionModule, Object {
         if (reply_to == null) return;
 
         ContentItem? quoted_content_item = stream_interactor.get_module(ContentItemStore.IDENTITY).get_content_item_for_referencing_id(conversation, reply_to.to_message_id);
-        if (quoted_content_item == null) return;
+        if (quoted_content_item == null) {
+            // MAM pages are fetched backwards. Keep the reference until its original arrives,
+            // including across an application restart while older pages are still missing.
+            db.reply.upsert()
+                    .value(db.reply.message_id, message.id, true)
+                    .value(db.reply.quoted_message_stanza_id, reply_to.to_message_id)
+                    .value(db.reply.quoted_message_from, reply_to.to_jid.to_string())
+                    .perform();
+            return;
+        }
 
         message.set_quoted_item(quoted_content_item.id);
     }
