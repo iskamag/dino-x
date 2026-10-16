@@ -360,6 +360,9 @@ public class FileImageWidget : Widget {
         }
         clear_picture();
         clear_fallback();
+        // Its animation target strongly references this widget, so it can only be released by an explicit dispose.
+        transmission_progress.unparent();
+        transmission_progress.dispose();
         if (overlay != null && overlay.parent != null) overlay.unparent();
         base.dispose();
     }
