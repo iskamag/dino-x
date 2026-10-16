@@ -26,15 +26,31 @@ public class List : Box {
 
     public List(StreamInteractor stream_interactor, Conversation conversation) {
         this.stream_interactor = stream_interactor;
-        list_box.set_header_func(header);
-        list_box.set_sort_func(sort);
-        list_box.set_filter_func(filter);
+        connect_list_box_callbacks(this);
         search_entry.search_changed.connect(refilter);
 
         stream_interactor.get_module(PresenceManager.IDENTITY).show_received.connect(on_show_received);
         stream_interactor.get_module(PresenceManager.IDENTITY).received_offline_presence.connect(on_received_offline_presence);
 
         initialize_for_conversation(conversation);
+    }
+
+    // The list box is a child of this widget, so storing a strong self reference as callback
+    // user-data would form a cycle that keeps the widget alive forever. Keep weak references.
+    private static void connect_list_box_callbacks(List local_self) {
+        var self_weak = WeakRef(local_self);
+        local_self.list_box.set_header_func((row, before_row) => {
+            List? self = self_weak.get() as List?;
+            if (self != null) self.header(row, before_row);
+        });
+        local_self.list_box.set_sort_func((row1, row2) => {
+            List? self = self_weak.get() as List?;
+            return self != null ? self.sort(row1, row2) : 0;
+        });
+        local_self.list_box.set_filter_func((row) => {
+            List? self = self_weak.get() as List?;
+            return self != null ? self.filter(row) : true;
+        });
     }
 
     public void initialize_for_conversation(Conversation conversation) {
