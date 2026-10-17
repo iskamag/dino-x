@@ -55,7 +55,7 @@ namespace Xmpp.Xep.Pubsub {
             return items_node.get_subnodes("item", NS_URI);
         }
 
-        public delegate void OnResult(XmppStream stream, Jid jid, string? id, StanzaNode? node);
+        public delegate void OnResult(XmppStream stream, Jid jid, string? id, StanzaNode? node, bool success);
         public void request(XmppStream stream, Jid? jid, string node, owned OnResult listener) { // TODO multiple nodes gehen auch
             Iq.Stanza request_iq = new Iq.Stanza.get(new StanzaNode.build("pubsub", NS_URI).add_self_xmlns().put_node(new StanzaNode.build("items", NS_URI).put_attribute("node", node)));
             if (jid != null) request_iq.to = jid;
@@ -64,7 +64,7 @@ namespace Xmpp.Xep.Pubsub {
                 StanzaNode items_node = event_node != null ? event_node.get_subnode("items", NS_URI) : null;
                 StanzaNode item_node = items_node != null ? items_node.get_subnode("item", NS_URI) : null;
                 string? id = item_node != null ? item_node.get_attribute("id", NS_URI) : null;
-                listener(stream, iq.from, id, item_node != null ? item_node.sub_nodes[0] : null);
+                listener(stream, iq.from, id, item_node != null && item_node.sub_nodes.size > 0 ? item_node.sub_nodes[0] : null, !iq.is_error());
             });
         }
 
@@ -198,7 +198,7 @@ namespace Xmpp.Xep.Pubsub {
                     string id = item_node.get_attribute("id", NS_URI_EVENT);
 
                     if (item_listeners.has_key(node)) {
-                        item_listeners[node].on_result(stream, message.from, id, item_node.sub_nodes[0]);
+                        item_listeners[node].on_result(stream, message.from, id, item_node.sub_nodes.size > 0 ? item_node.sub_nodes[0] : null);
                     }
                 }
 

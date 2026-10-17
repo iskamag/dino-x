@@ -31,7 +31,9 @@ public class StreamModule : XmppStreamModule {
 
     public override void attach(XmppStream stream) {
         stream.get_module(Pubsub.Module.IDENTITY).add_filtered_notification(stream, NODE_DEVICELIST,
-                (stream, jid, id, node) => parse_device_list(stream, jid, id, node), null, null);
+                (stream, jid, id, node) => {
+                    if (node != null) parse_device_list(stream, jid, id, node);
+                }, null, null);
     }
 
     public override void detach(XmppStream stream) {
@@ -45,9 +47,14 @@ public class StreamModule : XmppStreamModule {
             future = promise.future;
             active_devicelist_requests[jid] = future;
 
-            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, NODE_DEVICELIST, (stream, jid, id, node) => {
-                ArrayList<int32> device_list = parse_device_list(stream, jid, id, node);
-                promise.set_value(device_list);
+            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, NODE_DEVICELIST, (stream, jid, id, node, success) => {
+                if (!success) {
+                    warning("Could not load OMEMO device list for %s, keeping the last known list", jid.to_string());
+                    promise.set_value(new ArrayList<int32>());
+                } else {
+                    ArrayList<int32> device_list = parse_device_list(stream, jid, id, node);
+                    promise.set_value(device_list);
+                }
                 active_devicelist_requests.unset(jid);
             });
         }
@@ -113,8 +120,8 @@ public class StreamModule : XmppStreamModule {
     public void fetch_bundle(XmppStream stream, Jid jid, int device_id, bool ignore_if_non_present = true) {
         if (active_bundle_requests.add(jid.bare_jid.to_string() + @":$device_id")) {
             debug("Asking for bundle for %s/%d", jid.bare_jid.to_string(), device_id);
-            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid.bare_jid, @"$NODE_BUNDLES:$device_id", (stream, jid, id, node) => {
-                on_other_bundle_result(stream, jid, device_id, id, node, ignore_if_non_present);
+            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid.bare_jid, @"$NODE_BUNDLES:$device_id", (stream, jid, id, node, success) => {
+                on_other_bundle_result(stream, jid, device_id, id, node, success, ignore_if_non_present);
             });
         }
     }
@@ -148,8 +155,11 @@ public class StreamModule : XmppStreamModule {
         stream.get_module(Pubsub.Module.IDENTITY).delete_node(stream, null, NODE_DEVICELIST);
     }
 
-    private void on_other_bundle_result(XmppStream stream, Jid jid, int device_id, string? id, StanzaNode? node, bool ignore_if_non_present) {
-        if (node == null) {
+    private void on_other_bundle_result(XmppStream stream, Jid jid, int device_id, string? id, StanzaNode? node, bool success, bool ignore_if_non_present) {
+        if (!success) {
+            warning("Could not fetch bundle for %s/%d", jid.bare_jid.to_string(), device_id);
+            bundle_fetch_failed(jid, device_id);
+        } else if (node == null) {
             // Device not registered, shouldn't exist
             if (ignore_if_non_present) {
                 debug("Ignoring device %s/%d: No bundle", jid.bare_jid.to_string(), device_id);
@@ -210,7 +220,12 @@ public class StreamModule : XmppStreamModule {
         }
     }
 
-    private void on_self_bundle_result(XmppStream stream, Jid jid, string? id, StanzaNode? node) {
+    private void on_self_bundle_result(XmppStream stream, Jid jid, string? id, StanzaNode? node, bool success) {
+        if (!success) {
+            warning("Could not load own OMEMO bundle for %s, not republishing", jid.to_string());
+            stream.get_module(IDENTITY).active_bundle_requests.remove(jid.bare_jid.to_string() + @":$(store.local_registration_id)");
+            return;
+        }
         if (!Plugin.ensure_context()) return;
         Map<int, ECPublicKey> keys = new HashMap<int, ECPublicKey>();
         ECPublicKey? identity_key = null;
