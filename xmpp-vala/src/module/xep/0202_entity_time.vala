@@ -25,23 +25,27 @@ namespace Xmpp.Xep.EntityTime {
             active_time_requests[jid] = promise.future;
 
             DateTime? res = null;
+            uint timeout_id = 0;
             try {
                 Iq.Stanza iq = new Iq.Stanza.get(new StanzaNode.build("time", NS_URI).add_self_xmlns()) { to=jid };
                 var cancellable = new Cancellable();
-                var timeout_id = Timeout.add_seconds_once(10, () => cancellable.cancel());
+                timeout_id = Timeout.add_seconds_once(10, () => cancellable.cancel());
                 Iq.Stanza result = yield stream.get_module(Iq.Module.IDENTITY).send_iq_async(stream, iq, Priority.HIGH, cancellable);
-                Source.remove(timeout_id);
-                StanzaNode time_node = result.stanza.get_subnode("time", NS_URI);
-                if (time_node == null) return null;
-                StanzaNode tzo_node = time_node.get_subnode("tzo", NS_URI);
-                StanzaNode utc_node = time_node.get_subnode("utc", NS_URI);
-                TimeZone? tzo = null;
-                if (utc_node != null) res = DateTimeProfiles.parse_time(utc_node.get_string_content());
-                if (tzo_node != null) tzo = DateTimeProfiles.parse_tzd(tzo_node.get_string_content());
-                if (res != null && tzo != null) res = res.to_timezone(tzo);
-                promise.set_value(res);
+                StanzaNode? time_node = result.stanza.get_subnode("time", NS_URI);
+                if (time_node != null) {
+                    StanzaNode? tzo_node = time_node.get_subnode("tzo", NS_URI);
+                    StanzaNode? utc_node = time_node.get_subnode("utc", NS_URI);
+                    TimeZone? tzo = null;
+                    if (utc_node != null) res = DateTimeProfiles.parse_time(utc_node.get_string_content());
+                    if (tzo_node != null) tzo = DateTimeProfiles.parse_tzd(tzo_node.get_string_content());
+                    if (res != null && tzo != null) res = res.to_timezone(tzo);
+                }
             } catch (IOError e) {
                 debug("Error while fetching time: %s", e.message);
+            } finally {
+                if (timeout_id != 0) Source.remove(timeout_id);
+                active_time_requests.unset(jid);
+                promise.set_value(res);
             }
             return res;
         }

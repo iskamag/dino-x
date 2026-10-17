@@ -11,6 +11,7 @@ class ModuleHardeningTest : Gee.TestCase {
         add_test("presence_empty_priority", test_presence_empty_priority);
         add_async_test("iq_write_failure_propagates", (cb) => { test_iq_write_failure.begin(cb); });
         add_async_test("iq_request_cancellation", (cb) => { test_iq_cancellation.begin(cb); });
+        add_async_test("entity_time_failure_cleans_up", (cb) => { test_entity_time_failure.begin(cb); });
     }
 
     private class HardeningStream : IoXmppStream {
@@ -133,6 +134,23 @@ class ModuleHardeningTest : Gee.TestCase {
             cancelled = true;
         }
         fail_if_not(cancelled, "cancelled IQ request did not return");
+        cb();
+    }
+
+    private async void test_entity_time_failure(Gee.TestFinishedCallback cb) {
+        var stream = new FailingWriteStream();
+        var iq_module = new Iq.Module();
+        stream.add_module(iq_module);
+        iq_module.attach(stream);
+        var time_module = new Xep.EntityTime.Module();
+        time_module.enabled = true;
+        var jid = Jid.from_string("peer@example.com");
+
+        DateTime? first = yield time_module.query_time(stream, jid);
+        fail_if_not(first == null);
+        // A failed request must not leave a pending future behind.
+        DateTime? second = yield time_module.query_time(stream, jid);
+        fail_if_not(second == null);
         cb();
     }
 
