@@ -47,7 +47,7 @@ public class StreamModule : XmppStreamModule {
             future = promise.future;
             active_devicelist_requests[jid] = future;
 
-            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, NODE_DEVICELIST, (stream, jid, id, node, success) => {
+            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, NODE_DEVICELIST, (stream, from_jid, id, node, success) => {
                 if (!success) {
                     warning("Could not load OMEMO device list for %s, keeping the last known list", jid.to_string());
                     promise.set_value(new ArrayList<int32>());
