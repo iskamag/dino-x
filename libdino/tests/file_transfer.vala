@@ -215,6 +215,17 @@ private void check_row_column_access() {
     assert_null(row.get_text("n"));
     assert_cmpint((int) row.get_integer("n"), CompareOperator.EQ, 0);
     assert_true(row.to_string().contains("i: 42"));
+
+    // SQLite types are per row: the same statement can return different types.
+    var iterator = app.db.query_sql("SELECT 1 AS value UNION ALL SELECT 'text'", null);
+    var int_row = iterator.get_next();
+    assert_nonnull(int_row);
+    assert_cmpint((int) int_row.get_integer("value"), CompareOperator.EQ, 1);
+    assert_true(int_row.has_integer("value"));
+    var text_row = iterator.get_next();
+    assert_nonnull(text_row);
+    assert_cmpstr(text_row.get_text("value"), CompareOperator.EQ, "text");
+    assert_false(text_row.has_integer("value"));
 }
 
 private void check_account_list_cache() {

@@ -11,14 +11,16 @@ public class Row {
     private long[] int_values;
     private double[] real_values;
 
-    internal Row(Statement stmt, string[] column_names, HashMap<string, int> column_indexes, int[] column_types) {
+    internal Row(Statement stmt, string[] column_names, HashMap<string, int> column_indexes) {
         this.column_names = column_names;
         this.column_indexes = column_indexes;
-        this.column_types = column_types;
-        text_values = new string?[column_types.length];
-        int_values = new long[column_types.length];
-        real_values = new double[column_types.length];
-        for (int i = 0; i < column_types.length; i++) {
+        column_types = new int[column_names.length];
+        text_values = new string?[column_names.length];
+        int_values = new long[column_names.length];
+        real_values = new double[column_names.length];
+        for (int i = 0; i < column_names.length; i++) {
+            // SQLite column types are per row, not per statement.
+            column_types[i] = stmt.column_type(i);
             switch (column_types[i]) {
                 case TEXT:
                     text_values[i] = stmt.column_text(i);
@@ -96,7 +98,6 @@ public class RowIterator {
     private Statement stmt;
     private string[]? column_names = null;
     private HashMap<string, int>? column_indexes = null;
-    private int[]? column_types = null;
 
     public RowIterator.from_query_builder(Database db, QueryBuilder query) {
         this.db = db;
@@ -124,7 +125,6 @@ public class RowIterator {
     public Row get() {
         if (column_names == null) {
             string[] names = new string[stmt.column_count()];
-            int[] types = new int[stmt.column_count()];
             var indexes = new HashMap<string, int>();
             for (int i = 0; i < stmt.column_count(); i++) {
                 if (stmt.column_origin_name(i) != null) {
@@ -133,13 +133,11 @@ public class RowIterator {
                     names[i] = stmt.column_name(i);
                 }
                 indexes[names[i]] = i;
-                types[i] = stmt.column_type(i);
             }
             column_names = names;
             column_indexes = indexes;
-            column_types = types;
         }
-        return new Row(stmt, (!)column_names, (!)column_indexes, (!)column_types);
+        return new Row(stmt, (!)column_names, (!)column_indexes);
     }
 
     public Row? get_next() {
