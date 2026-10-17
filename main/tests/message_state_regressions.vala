@@ -1,3 +1,4 @@
+using Gee;
 using Dino.Entities;
 
 namespace Dino.Ui.Test {
@@ -58,6 +59,40 @@ private void test_private_room_history() {
         assert_cmpint(messages[0].id, CompareOperator.EQ, alice_message.id);
         assert_cmpint(storage.get_last_message(alice).id, CompareOperator.EQ, alice_message.id);
         assert_true(storage.get_message_by_stanza_id(alice_message.stanza_id, alice).counterpart.equals(alice.counterpart));
+    } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
+}
+
+private void test_sfs_source_sender_scope() {
+    try {
+        var app = get_service_app();
+        var account = create_account(app);
+        var conversation = state_conversation(app, account, "peer@example.com");
+        var peer = Xmpp.Jid.from_string("peer@example.com/device");
+        var now = new DateTime.now_utc();
+        var message = new Message("file") {
+            account=account, counterpart=peer, ourpart=account.bare_jid, direction=Message.DIRECTION_RECEIVED,
+            type_=Message.Type.CHAT, stanza_id="ref", server_id="ref", time=now, local_time=now
+        };
+        app.stream_interactor.get_module(MessageStorage.IDENTITY).add_message(message, conversation);
+
+        var transfer = new FileTransfer() {
+            account=account, counterpart=peer, ourpart=account.bare_jid, direction=FileTransfer.DIRECTION_RECEIVED,
+            provider=StatelessFileSharing.SFS_PROVIDER_ID, info=message.id.to_string(), file_sharing_id="fid",
+            file_name="file.txt", size=10 * 1024 * 1024, state=FileTransfer.State.NOT_STARTED,
+            time=now, local_time=now
+        };
+        transfer.hashes.add(new Xmpp.Xep.CryptographicHashes.Hash.with_checksum(ChecksumType.SHA256, "x"));
+        app.stream_interactor.get_module(FileTransferStorage.IDENTITY).add_file(transfer);
+
+        var sfs = app.stream_interactor.get_module(StatelessFileSharing.IDENTITY);
+        var sources = new Gee.ArrayList<Xmpp.Xep.StatelessFileSharing.Source>();
+        sources.add(new Xmpp.Xep.StatelessFileSharing.HttpSource() { url="https://example.com/attachment" });
+
+        sfs.on_received_sources(Xmpp.Jid.from_string("attacker@example.com/other"), conversation, "ref", "fid", sources);
+        assert_cmpint(transfer.sfs_sources.size, CompareOperator.EQ, 0);
+
+        sfs.on_received_sources(peer, conversation, "ref", "fid", sources);
+        assert_cmpint(transfer.sfs_sources.size, CompareOperator.EQ, 1);
     } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
 }
 
@@ -269,6 +304,7 @@ private void test_late_reply_widget() {
 private void add_message_state_regression_tests() {
     GLib.Test.add_func("/messages/dedupe-type-scope", test_dedupe_scopes_message_type);
     GLib.Test.add_func("/messages/after-backfilled", test_messages_after_backfilled);
+    GLib.Test.add_func("/messages/sfs-source-sender", test_sfs_source_sender_scope);
     GLib.Test.add_func("/messages/cold-server-id", test_cold_server_id_lookup);
     GLib.Test.add_func("/messages/private-room-history", test_private_room_history);
     GLib.Test.add_func("/messages/correction-retry", () => check_correction_transmission(false));

@@ -152,6 +152,13 @@ public class Dino.StatelessFileSharing : StreamInteractionModule, Object {
         }
         if (file_transfer == null) return;
 
+        Jid expected_sender = file_transfer.direction == FileTransfer.DIRECTION_RECEIVED
+                ? file_transfer.counterpart : file_transfer.ourpart;
+        if (!from.equals(expected_sender) && !from.equals_bare(conversation.account.bare_jid)) {
+            info("Ignoring sfs source from unexpected sender %s", from.to_string());
+            return;
+        }
+
         // "If no <hash/> is provided or the <hash/> elements provided use unsupported algorithms, receiving clients MUST ignore
         // any attached sources from other senders and only obtain the file from the sources announced by the original sender."
         // For now we don't allow source attachments for file shares without hashes. TODO extend this
