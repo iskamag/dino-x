@@ -132,6 +132,7 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
 
     public override void attach(XmppStream stream) {
         enable_requested = false;
+        resume_session_id = null;
         stream.get_module(Bind.Module.IDENTITY).bound_to_resource.connect(check_enable);
         stream.received_features_node.connect(check_resume);
 
