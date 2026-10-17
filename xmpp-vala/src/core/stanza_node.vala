@@ -11,6 +11,9 @@ public abstract class StanzaEntry {
     public string? ns_uri;
     public string name;
     public string? val;
+    // Original prefix for elements/attributes whose prefix is not bound in the
+    // current namespace state. Kept so opaque content can be serialized again.
+    public string? prefix;
 
     public string? encoded_val {
         owned get {
@@ -461,7 +464,9 @@ public class StanzaNode : StanzaEntry {
             }
         }
         var sb = new StringBuilder();
-        if (ns_uri == my_state.current_ns_uri) {
+        if (ns_uri == "" && prefix != null) {
+            sb.append_printf("<%s:%s", (!)prefix, name);
+        } else if (ns_uri == my_state.current_ns_uri) {
             sb.append_printf("<%s", name);
         } else {
             sb.append_printf("<%s:%s", my_state.find_name ((!)ns_uri), name);
@@ -478,7 +483,9 @@ public class StanzaNode : StanzaEntry {
                 foreach (StanzaNode subnode in sub_nodes) {
                     sb.append(subnode.to_xml(my_state));
                 }
-                if (ns_uri == my_state.current_ns_uri) {
+                if (ns_uri == "" && prefix != null) {
+                    sb.append_printf("</%s:%s>", (!)prefix, name);
+                } else if (ns_uri == my_state.current_ns_uri) {
                     sb.append(@"</$name>");
                 } else {
                     sb.append_printf("</%s:%s>", my_state.find_name ((!)ns_uri), name);

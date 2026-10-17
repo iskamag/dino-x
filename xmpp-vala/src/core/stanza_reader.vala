@@ -165,6 +165,7 @@ public class StanzaReader {
         if (entry.ns_uri != null) return;
         if (entry.name.contains(":")) {
             var split = entry.name.split(":");
+            entry.prefix = split[0];
             try {
                 entry.ns_uri = ns_state.find_uri(split[0]);
             } catch (IOError e) {

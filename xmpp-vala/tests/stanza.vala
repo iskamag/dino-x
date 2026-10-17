@@ -92,6 +92,18 @@ class StanzaTest : Gee.TestCase {
         StanzaNode? body = second.get_subnode("body");
         if (fail_if(body == null)) { cb(); return; }
         fail_if_not_eq_str(body.get_string_content(), "ok");
+
+        // Opaque elements keep their prefix so they can be written again.
+        string opaque_xml = first.to_xml();
+        fail_if_not(opaque_xml.contains("<foo:bar>"), opaque_xml);
+        var opaque_roundtrip = yield new StanzaReader.for_string(opaque_xml).read_node();
+        StanzaNode? opaque_again = ((!)opaque_roundtrip).get_subnode("bar", "");
+        if (fail_if(opaque_again == null)) { cb(); return; }
+
+        var attr_reader = new StanzaReader.for_string("<message xmlns='jabber:client' foo:bar='baz'><body>ok</body></message>");
+        var attr_message = yield attr_reader.read_node();
+        string attr_xml = attr_message.to_xml();
+        fail_if_not(attr_xml.contains("foo:bar='baz'"), attr_xml);
         cb();
     }
 
