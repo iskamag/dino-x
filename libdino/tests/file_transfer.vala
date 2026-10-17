@@ -202,6 +202,21 @@ private void check_query_sql_args() {
     assert_cmpstr(row.get_text("value"), CompareOperator.EQ, "hello");
 }
 
+private void check_row_column_access() {
+    var row = app.db.query_sql("SELECT 42 AS i, 'text' AS t, 1.5 AS r, NULL AS n", null).get_next();
+    assert_nonnull(row);
+    assert_cmpint((int) row.get_integer("i"), CompareOperator.EQ, 42);
+    assert_true(row.has_integer("i"));
+    assert_cmpstr(row.get_text("t"), CompareOperator.EQ, "text");
+    assert_cmpfloat(row.get_real("r"), CompareOperator.EQ, 1.5);
+    assert_true(row.has_real("r"));
+    assert_false(row.has_integer("n"));
+    assert_false(row.has_real("n"));
+    assert_null(row.get_text("n"));
+    assert_cmpint((int) row.get_integer("n"), CompareOperator.EQ, 0);
+    assert_true(row.to_string().contains("i: 42"));
+}
+
 private void check_account_list_cache() {
     int count = app.db.get_accounts().size;
     var account = new Account(Xmpp.Jid.from_string(Xmpp.random_uuid() + "@example.com"), "");
@@ -292,6 +307,7 @@ int main(string[] args) {
     GLib.Test.add_func("/file-transfers/unknown-size-limit", () => run_check(5));
     GLib.Test.add_func("/file-transfers/read-timeout", () => run_check(6));
     GLib.Test.add_func("/file-transfers/query-sql-args", check_query_sql_args);
+    GLib.Test.add_func("/file-transfers/row-column-access", check_row_column_access);
     GLib.Test.add_func("/file-transfers/info-index", check_file_transfer_info_index);
     GLib.Test.add_func("/file-transfers/account-list-cache", check_account_list_cache);
     return GLib.Test.run();
