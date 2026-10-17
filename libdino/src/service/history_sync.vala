@@ -453,6 +453,8 @@ public class Dino.HistorySync {
     private async void send_messages_back_into_pipeline(Account account, string query_id, Cancellable? cancellable = null) {
         if (!stanzas.has_key(query_id)) return;
 
+        // Keep autocommit here: pages for different rooms and accounts interleave
+        // across the async pipeline and cannot safely share one SQLite transaction.
         foreach (Xmpp.MessageStanza message in stanzas[query_id]) {
             if (cancellable != null && cancellable.is_cancelled()) break;
             yield stream_interactor.get_module(MessageProcessor.IDENTITY).run_pipeline_announce(account, message);
