@@ -83,6 +83,8 @@ test_sources = [
     'tests/native/curve25519.vala',
     'tests/native/hkdf.vala',
     'tests/native/session_builder.vala',
+    'tests/policy.vala',
+    'tests/database.vala',
 ]
 test_vala_args = [
     '--vapidir', meson.current_source_dir() / 'vapi',

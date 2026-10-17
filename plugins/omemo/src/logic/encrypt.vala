@@ -88,12 +88,12 @@ namespace Dino.Plugins.Omemo {
             //Encrypt the key for each recipient's device individually
             foreach (Jid recipient in recipients) {
                 EncryptionResult enc_res = encrypt_key_to_recipient(stream, enc_data, recipient);
-                status.add_result(enc_res, false);
+                status.add_result(enc_res, false, recipient);
             }
 
             // Encrypt the key for each own device
             EncryptionResult enc_res = encrypt_key_to_recipient(stream, enc_data, self_jid);
-            status.add_result(enc_res, true);
+            status.add_result(enc_res, true, self_jid);
 
             return status;
         }
@@ -111,8 +111,12 @@ namespace Dino.Plugins.Omemo {
                     encrypt_key(enc_data, recipient, device_id);
                     result.success++;
                 } catch (Error e) {
-                    if (e.code == ErrorCode.UNKNOWN) result.unknown++;
-                    else result.failure++;
+                    if (e.code == ErrorCode.UNKNOWN) {
+                        result.unknown++;
+                        result.unknown_devices.add(device_id);
+                    } else {
+                        result.failure++;
+                    }
                 }
             }
             return result;

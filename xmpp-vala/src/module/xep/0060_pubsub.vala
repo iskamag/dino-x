@@ -55,17 +55,91 @@ namespace Xmpp.Xep.Pubsub {
             return items_node.get_subnodes("item", NS_URI);
         }
 
-        public delegate void OnResult(XmppStream stream, Jid jid, string? id, StanzaNode? node, bool success);
+        public delegate void OnResult(XmppStream stream, Jid? jid, string? id, StanzaNode? node, bool success);
+
+        // Bounded wait for a PEP response. Without it a dropped IQ leaves the
+        // caller (e.g. the OMEMO device-list future) pending forever.
+        private const int REQUEST_TIMEOUT_SECONDS = 30;
+
+        // Readable/writable so tests can lower the timeout (0 disables it).
+        public int request_timeout_seconds { get; set; default = REQUEST_TIMEOUT_SECONDS; }
+
+        private class RequestContext : Object {
+            public OnResult listener;
+            public bool finished = false;
+            public uint timeout_id = 0;
+
+            public RequestContext(owned OnResult listener) {
+                this.listener = (owned) listener;
+            }
+        }
+
         public void request(XmppStream stream, Jid? jid, string node, owned OnResult listener) { // TODO multiple nodes gehen auch
             Iq.Stanza request_iq = new Iq.Stanza.get(new StanzaNode.build("pubsub", NS_URI).add_self_xmlns().put_node(new StanzaNode.build("items", NS_URI).put_attribute("node", node)));
             if (jid != null) request_iq.to = jid;
-            stream.get_module(Iq.Module.IDENTITY).send_iq(stream, request_iq, (stream, iq) => {
-                StanzaNode event_node = iq.stanza.get_subnode("pubsub", NS_URI);
-                StanzaNode items_node = event_node != null ? event_node.get_subnode("items", NS_URI) : null;
-                StanzaNode item_node = items_node != null ? items_node.get_subnode("item", NS_URI) : null;
-                string? id = item_node != null ? item_node.get_attribute("id", NS_URI) : null;
-                listener(stream, iq.from, id, item_node != null && item_node.sub_nodes.size > 0 ? item_node.sub_nodes[0] : null, !iq.is_error());
+
+            var context = new RequestContext((owned) listener);
+            var cancellable = new Cancellable();
+            if (request_timeout_seconds <= 0) {
+                stream.get_module(Iq.Module.IDENTITY).send_iq_async.begin(stream, request_iq, Priority.DEFAULT, cancellable, (obj, res) => {
+                    handle_request_result(stream, jid, node, context, obj, res);
+                });
+                return;
+            }
+
+            context.timeout_id = Timeout.add_seconds((uint) request_timeout_seconds, () => {
+                context.timeout_id = 0;
+                if (!context.finished) {
+                    context.finished = true;
+                    debug("Pubsub request for %s timed out", node);
+                    // Make sure the caller is released even if the write never
+                    // completes or the stream disappears mid-request.
+                    context.listener(stream, jid, null, null, false);
+                }
+                cancellable.cancel();
+                return false;
             });
+
+            stream.get_module(Iq.Module.IDENTITY).send_iq_async.begin(stream, request_iq, Priority.DEFAULT, cancellable, (obj, res) => {
+                handle_request_result(stream, jid, node, context, obj, res);
+            });
+        }
+
+        private void handle_request_result(XmppStream stream, Jid? requested_jid, string node, RequestContext context, Object? source, AsyncResult res) {
+            if (context.finished) return;
+            context.finished = true;
+            if (context.timeout_id != 0) {
+                Source.remove(context.timeout_id);
+                context.timeout_id = 0;
+            }
+
+            Iq.Stanza? iq_result = null;
+            try {
+                iq_result = stream.get_module(Iq.Module.IDENTITY).send_iq_async.end(res);
+            } catch (IOError e) {
+                debug("Pubsub request for %s failed: %s", node, e.message);
+            }
+
+            StanzaNode? item_node = null;
+            string? id = null;
+            bool success = false;
+            if (iq_result != null) {
+                StanzaNode? event_node = iq_result.stanza.get_subnode("pubsub", NS_URI);
+                StanzaNode? items_node = event_node != null ? event_node.get_subnode("items", NS_URI) : null;
+                item_node = items_node != null ? items_node.get_subnode("item", NS_URI) : null;
+                id = item_node != null ? item_node.get_attribute("id", NS_URI) : null;
+                success = !iq_result.is_error();
+            }
+
+            Jid? from_jid = iq_result != null ? iq_result.from : null;
+            if (from_jid == null) from_jid = requested_jid;
+            if (from_jid == null) {
+                Bind.Flag? bind_flag = stream.get_flag(Bind.Flag.IDENTITY);
+                if (bind_flag != null) from_jid = bind_flag.my_jid;
+            }
+
+            context.listener(stream, from_jid, id,
+                item_node != null && item_node.sub_nodes.size > 0 ? item_node.sub_nodes[0] : null, success);
         }
 
         public async bool publish(

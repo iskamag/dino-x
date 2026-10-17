@@ -12,16 +12,50 @@ private const string NODE_VERIFICATION = NS_URI + ".verification";
 
 private const int NUM_KEYS_TO_PUBLISH = 100;
 
+public class DeviceListResult : Object {
+    public ArrayList<int32> devices { get; private set; }
+    public bool success { get; private set; }
+
+    public DeviceListResult(ArrayList<int32> devices, bool success) {
+        this.devices = devices;
+        this.success = success;
+    }
+
+    public static DeviceListResult ok(ArrayList<int32> devices) {
+        return new DeviceListResult(devices, true);
+    }
+
+    public static DeviceListResult failure() {
+        return new DeviceListResult(new ArrayList<int32>(), false);
+    }
+}
+
 public class StreamModule : XmppStreamModule {
     public static Xmpp.ModuleIdentity<StreamModule> IDENTITY = new Xmpp.ModuleIdentity<StreamModule>(NS_URI, "omemo_module");
     private static TimeSpan IGNORE_TIME = TimeSpan.MINUTE;
 
     public Store store { public get; private set; }
-    private ConcurrentSet<string> active_bundle_requests = new ConcurrentSet<string>();
-    private HashMap<Jid, Future<ArrayList<int32>>> active_devicelist_requests = new HashMap<Jid, Future<ArrayList<int32>>>(Jid.hash_func, Jid.equals_func);
+
+    private class BundleRequest : Object {
+        public Jid jid;
+        public int32 device_id;
+
+        public BundleRequest(Jid jid, int32 device_id) {
+            this.jid = jid;
+            this.device_id = device_id;
+        }
+    }
+
+    // Pending requests are kept across callbacks so detach() can fail them
+    // instead of leaving unresolved futures behind.
+    private HashMap<Jid, Promise<DeviceListResult>> active_devicelist_requests = new HashMap<Jid, Promise<DeviceListResult>>(Jid.hash_func, Jid.equals_func);
+    // Requests from an older stream must not mutate state after a reconnect.
+    private uint stream_generation = 0;
+    private HashMap<string, BundleRequest> active_bundle_requests = new HashMap<string, BundleRequest>();
     private Map<string, DateTime> device_ignore_time = new HashMap<string, DateTime>();
 
     public signal void device_list_loaded(Jid jid, ArrayList<int32> devices);
+    public signal void device_list_fetch_failed(Jid jid);
     public signal void bundle_fetched(Jid jid, int device_id, Bundle bundle);
     public signal void bundle_fetch_failed(Jid jid, int device_id);
 
@@ -30,6 +64,9 @@ public class StreamModule : XmppStreamModule {
     }
 
     public override void attach(XmppStream stream) {
+        // A fresh stream cannot answer requests issued for a previous one.
+        stream_generation++;
+        clear_pending_requests(false);
         stream.get_module(Pubsub.Module.IDENTITY).add_filtered_notification(stream, NODE_DEVICELIST,
                 (stream, jid, id, node) => {
                     if (node != null) parse_device_list(stream, jid, id, node);
@@ -37,34 +74,72 @@ public class StreamModule : XmppStreamModule {
     }
 
     public override void detach(XmppStream stream) {
+        stream_generation++;
         stream.get_module(Pubsub.Module.IDENTITY).remove_filtered_notification(stream, NODE_DEVICELIST);
+        clear_pending_requests(true);
     }
 
-    public async ArrayList<int32> request_user_devicelist(XmppStream stream, Jid jid) {
-        var future = active_devicelist_requests[jid];
-        if (future == null) {
-            var promise = new Promise<ArrayList<int32>?>();
-            future = promise.future;
-            active_devicelist_requests[jid] = future;
+    private void clear_pending_requests(bool notify) {
+        ArrayList<Promise<DeviceListResult>> device_lists = new ArrayList<Promise<DeviceListResult>>();
+        lock (active_devicelist_requests) {
+            device_lists.add_all(active_devicelist_requests.values);
+            active_devicelist_requests.clear();
+        }
+        foreach (var promise in device_lists) {
+            if (!promise.future.ready) promise.set_value(DeviceListResult.failure());
+        }
 
+        ArrayList<BundleRequest> bundles = new ArrayList<BundleRequest>();
+        lock (active_bundle_requests) {
+            bundles.add_all(active_bundle_requests.values);
+            active_bundle_requests.clear();
+        }
+        if (!notify) return;
+        foreach (var request in bundles) {
+            bundle_fetch_failed(request.jid, request.device_id);
+        }
+    }
+
+    public async DeviceListResult request_user_devicelist(XmppStream stream, Jid jid) {
+        Promise<DeviceListResult>? promise;
+        bool new_request = false;
+        lock (active_devicelist_requests) {
+            promise = active_devicelist_requests[jid];
+            if (promise == null) {
+                promise = new Promise<DeviceListResult>();
+                active_devicelist_requests[jid] = promise;
+                new_request = true;
+            }
+        }
+
+        if (new_request) {
+            var request_promise = (!)promise;
+            uint generation = stream_generation;
             stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, NODE_DEVICELIST, (stream, from_jid, id, node, success) => {
+                if (generation != stream_generation) {
+                    if (!request_promise.future.ready) request_promise.set_value(DeviceListResult.failure());
+                    return;
+                }
+                DeviceListResult result;
                 if (!success) {
                     warning("Could not load OMEMO device list for %s, keeping the last known list", jid.to_string());
-                    promise.set_value(new ArrayList<int32>());
+                    result = DeviceListResult.failure();
+                    device_list_fetch_failed(jid);
                 } else {
-                    ArrayList<int32> device_list = parse_device_list(stream, jid, id, node);
-                    promise.set_value(device_list);
+                    result = DeviceListResult.ok(parse_device_list(stream, jid, id, node));
                 }
-                active_devicelist_requests.unset(jid);
+                if (!request_promise.future.ready) request_promise.set_value(result);
+                lock (active_devicelist_requests) {
+                    if (active_devicelist_requests[jid] == request_promise) active_devicelist_requests.unset(jid);
+                }
             });
         }
 
         try {
-            ArrayList<int32> device_list = yield future.wait_async();
-            return device_list;
+            return yield ((!)promise).future.wait_async();
         } catch (FutureError error) {
             warning("Future error when waiting for device list: %s", error.message);
-            return new ArrayList<int32>();
+            return DeviceListResult.failure();
         }
     }
 
@@ -72,12 +147,13 @@ public class StreamModule : XmppStreamModule {
         ArrayList<int32> device_list = new ArrayList<int32>();
 
         StanzaNode node = node_ ?? new StanzaNode.build("list", NS_URI).add_self_xmlns();
-        Jid? my_jid = stream.get_flag(Bind.Flag.IDENTITY).my_jid;
-        if (my_jid == null) return device_list;
-        if (jid.equals_bare(my_jid) && store.local_registration_id != 0) {
+        Bind.Flag? bind_flag = stream.get_flag(Bind.Flag.IDENTITY);
+        Jid? my_jid = bind_flag != null ? bind_flag.my_jid : null;
+        if (my_jid != null && jid.equals_bare((!)my_jid) && store.local_registration_id != 0) {
             bool am_on_devicelist = false;
             foreach (StanzaNode device_node in node.get_subnodes("device")) {
                 int device_id = device_node.get_attribute_int("id");
+                if (device_id <= 0) continue;
                 if (store.local_registration_id == device_id) {
                     am_on_devicelist = true;
                 }
@@ -93,7 +169,8 @@ public class StreamModule : XmppStreamModule {
         }
 
         foreach (StanzaNode device_node in node.get_subnodes("device")) {
-            device_list.add(device_node.get_attribute_int("id"));
+            int device_id = device_node.get_attribute_int("id");
+            if (device_id > 0) device_list.add(device_id);
         }
         device_list_loaded(jid, device_list);
 
@@ -117,12 +194,46 @@ public class StreamModule : XmppStreamModule {
         address.device_id = 0; // TODO: Hack to have address obj live longer
     }
 
+    // Drops a stored session that could not be used for encryption so the
+    // bundle fetch below can build a fresh one.
+    public void reset_session_and_fetch_bundle(XmppStream stream, Jid jid, int32 device_id) {
+        Address address = new Address(jid.bare_jid.to_string(), device_id);
+        try {
+            if (store.contains_session(address)) {
+                store.session_store.delete_session(address);
+            }
+        } catch (Error e) {
+            debug("Could not reset OMEMO session with %s/%d: %s", jid.bare_jid.to_string(), device_id, e.message);
+        }
+        fetch_bundle(stream, jid, device_id, false);
+    }
+
     public void fetch_bundle(XmppStream stream, Jid jid, int device_id, bool ignore_if_non_present = true) {
-        if (active_bundle_requests.add(jid.bare_jid.to_string() + @":$device_id")) {
-            debug("Asking for bundle for %s/%d", jid.bare_jid.to_string(), device_id);
-            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid.bare_jid, @"$NODE_BUNDLES:$device_id", (stream, jid, id, node, success) => {
-                on_other_bundle_result(stream, jid, device_id, id, node, success, ignore_if_non_present);
-            });
+        if (device_id <= 0) return;
+        if (!begin_bundle_request(jid, device_id)) return;
+        debug("Asking for bundle for %s/%d", jid.bare_jid.to_string(), device_id);
+        uint generation = stream_generation;
+        stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid.bare_jid, @"$NODE_BUNDLES:$device_id", (stream, from_jid, id, node, success) => {
+            if (generation != stream_generation) {
+                end_bundle_request(jid.bare_jid, device_id);
+                return;
+            }
+            on_other_bundle_result(stream, jid.bare_jid, device_id, id, node, success, ignore_if_non_present);
+        });
+    }
+
+    private bool begin_bundle_request(Jid jid, int32 device_id) {
+        string key = jid.bare_jid.to_string() + @":$device_id";
+        lock (active_bundle_requests) {
+            if (active_bundle_requests.has_key(key)) return false;
+            active_bundle_requests[key] = new BundleRequest(jid.bare_jid, device_id);
+            return true;
+        }
+    }
+
+    private void end_bundle_request(Jid jid, int32 device_id) {
+        lock (active_bundle_requests) {
+            active_bundle_requests.unset(jid.bare_jid.to_string() + @":$device_id");
         }
     }
 
@@ -156,6 +267,7 @@ public class StreamModule : XmppStreamModule {
     }
 
     private void on_other_bundle_result(XmppStream stream, Jid jid, int device_id, string? id, StanzaNode? node, bool success, bool ignore_if_non_present) {
+        end_bundle_request(jid, device_id);
         if (!success) {
             warning("Could not fetch bundle for %s/%d", jid.bare_jid.to_string(), device_id);
             bundle_fetch_failed(jid, device_id);
@@ -172,7 +284,6 @@ public class StreamModule : XmppStreamModule {
             debug("Received bundle for %s/%d: %s", jid.bare_jid.to_string(), device_id, Base64.encode(bundle.identity_key.serialize()));
             bundle_fetched(jid, device_id, bundle);
         }
-        stream.get_module(IDENTITY).active_bundle_requests.remove(jid.bare_jid.to_string() + @":$device_id");
     }
 
     public bool start_session(XmppStream stream, Jid jid, int32 device_id, Bundle bundle) {
@@ -215,18 +326,27 @@ public class StreamModule : XmppStreamModule {
     }
 
     public void publish_bundles_if_needed(XmppStream stream, Jid jid) {
-        if (active_bundle_requests.add(jid.bare_jid.to_string() + @":$(store.local_registration_id)")) {
-            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, @"$NODE_BUNDLES:$(store.local_registration_id)", on_self_bundle_result);
+        if (begin_bundle_request(jid, (int32) store.local_registration_id)) {
+            uint generation = stream_generation;
+            stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, @"$NODE_BUNDLES:$(store.local_registration_id)", (stream, from_jid, id, node, success) => {
+                if (generation != stream_generation) return;
+                on_self_bundle_result(stream, from_jid, id, node, success);
+            });
         }
     }
 
-    private void on_self_bundle_result(XmppStream stream, Jid jid, string? id, StanzaNode? node, bool success) {
+    private void on_self_bundle_result(XmppStream stream, Jid? jid_, string? id, StanzaNode? node, bool success) {
+        if (jid_ == null) return;
+        Jid jid = (!)jid_;
+        end_bundle_request(jid, (int32) store.local_registration_id);
         if (!success) {
             warning("Could not load own OMEMO bundle for %s, not republishing", jid.to_string());
-            stream.get_module(IDENTITY).active_bundle_requests.remove(jid.bare_jid.to_string() + @":$(store.local_registration_id)");
             return;
         }
-        if (!Plugin.ensure_context()) return;
+        if (!Plugin.ensure_context()) {
+            warning("OMEMO context unavailable, not republishing own bundle for %s", jid.to_string());
+            return;
+        }
         Map<int, ECPublicKey> keys = new HashMap<int, ECPublicKey>();
         ECPublicKey? identity_key = null;
         int32 signed_pre_key_id = -1;
@@ -293,7 +413,6 @@ public class StreamModule : XmppStreamModule {
         } catch (Error e) {
             warning(@"Unexpected error while publishing bundle: $(e.message)\n");
         }
-        stream.get_module(IDENTITY).active_bundle_requests.remove(jid.bare_jid.to_string() + @":$(store.local_registration_id)");
     }
 
     public async void publish_bundles(XmppStream stream, SignedPreKeyRecord signed_pre_key_record, IdentityKeyPair identity_key_pair, Set<PreKeyRecord> pre_key_records, int32 device_id) throws Error {

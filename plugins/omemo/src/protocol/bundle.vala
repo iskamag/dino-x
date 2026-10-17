@@ -16,7 +16,8 @@ public class Bundle {
         if (node == null) return -1;
         string? id = ((!)node).get_deep_attribute("signedPreKeyPublic", "signedPreKeyId");
         if (id == null) return -1;
-        return int.parse((!)id);
+        int value = -1;
+        return int.try_parse((!)id, out value) ? value : -1;
     }}
 
     public ECPublicKey? signed_pre_key { owned get {
@@ -70,7 +71,8 @@ public class Bundle {
         }
 
         public int32 key_id { get {
-            return int.parse(node.get_attribute("preKeyId") ?? "-1");
+            int value = -1;
+            return int.try_parse(node.get_attribute("preKeyId") ?? "-1", out value) ? value : -1;
         }}
 
         public ECPublicKey? key { owned get {

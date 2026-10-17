@@ -6,6 +6,8 @@ int main(string[] args) {
     TestSuite.get_root().add_suite(new Curve25519().get_suite());
     TestSuite.get_root().add_suite(new SessionBuilderTest().get_suite());
     TestSuite.get_root().add_suite(new HKDF().get_suite());
+    TestSuite.get_root().add_suite(new PolicyTest().get_suite());
+    TestSuite.get_root().add_suite(new DatabaseTest().get_suite());
     return GLib.Test.run();
 }
 

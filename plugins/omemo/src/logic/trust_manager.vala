@@ -69,7 +69,16 @@ public class TrustManager {
     public bool is_known_address(Account account, Jid jid) {
         int identity_id = db.identity.get_id(account.id);
         if (identity_id < 0) return false;
-        return db.identity_meta.with_address(identity_id, jid.to_string()).with(db.identity_meta.last_active, ">", 0).count() > 0;
+        string address = jid.bare_jid.to_string();
+        // A trust row is created for every address whose device list was
+        // fetched successfully, including an empty list. This is what "we may
+        // proceed" means; last_active alone stays 0 for an empty list.
+        if (db.trust.select().with(db.trust.identity_id, "=", identity_id).with(db.trust.address_name, "=", address).count() > 0) {
+            return true;
+        }
+        // Migration fallback for databases created before the trust row was
+        // used as the marker.
+        return db.identity_meta.with_address(identity_id, address).with(db.identity_meta.last_active, ">", 0).count() > 0;
     }
 
     public Gee.List<int32> get_trusted_devices(Account account, Jid jid) {

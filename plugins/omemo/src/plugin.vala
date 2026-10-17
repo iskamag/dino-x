@@ -90,7 +90,8 @@ public class Plugin : RootInterface, Object {
         int identity_id = db.identity.get_id(account.id);
         if (identity_id < 0) return false;
 
-        return db.identity_meta.get_new_devices(identity_id, jid.bare_jid.to_string()).count() > 0;
+        return db.identity_meta.get_new_devices(identity_id, jid.bare_jid.to_string()).count() > 0 ||
+            db.identity_meta.get_pending_identity_keys(identity_id, jid.bare_jid.to_string()).count() > 0;
     }
 }
 

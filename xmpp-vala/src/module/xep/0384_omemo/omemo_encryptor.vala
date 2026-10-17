@@ -76,6 +76,10 @@ namespace Xmpp.Xep.Omemo {
         public int success { get; set; }
         public int unknown { get; set; }
         public int failure { get; set; }
+        // Devices that failed with ErrorCode.UNKNOWN (usually a missing or
+        // unusable session). The manager resets those sessions and refetches
+        // the bundles instead of waiting for a counter that never moves.
+        public Gee.List<int32> unknown_devices = new ArrayList<int32>();
     }
 
     public class EncryptState {
@@ -94,7 +98,10 @@ namespace Xmpp.Xep.Omemo {
         public int own_failure { get; set; }
         public bool own_list { get; set; }
 
-        public void add_result(EncryptionResult enc_res, bool own) {
+        public HashMap<string, ArrayList<int32>> other_unknown_devices = new HashMap<string, ArrayList<int32>>();
+        public HashMap<string, ArrayList<int32>> own_unknown_devices = new HashMap<string, ArrayList<int32>>();
+
+        public void add_result(EncryptionResult enc_res, bool own, Jid? recipient = null) {
             if (own) {
                 own_lost += enc_res.lost;
                 own_success += enc_res.success;
@@ -106,6 +113,15 @@ namespace Xmpp.Xep.Omemo {
                 other_unknown += enc_res.unknown;
                 other_failure += enc_res.failure;
             }
+            if (recipient == null || enc_res.unknown_devices.is_empty) return;
+            var devices_by_jid = own ? own_unknown_devices : other_unknown_devices;
+            string key = recipient.to_string();
+            ArrayList<int32>? devices = devices_by_jid[key];
+            if (devices == null) {
+                devices = new ArrayList<int32>();
+                devices_by_jid[key] = devices;
+            }
+            devices.add_all(enc_res.unknown_devices);
         }
 
         public string to_string() {
