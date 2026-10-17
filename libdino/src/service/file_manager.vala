@@ -235,7 +235,7 @@ public class FileManager : StreamInteractionModule, Object {
 
             file_meta = yield file_provider.get_meta_info(file_transfer, receive_data, file_meta);
 
-            file_transfer.size = (int)file_meta.size;
+            file_transfer.size = file_meta.size;
             file_transfer.file_name = file_meta.file_name;
             file_transfer.content_type = file_meta.content_type;
         }
@@ -248,6 +248,13 @@ public class FileManager : StreamInteractionModule, Object {
         if (file_transfer.state == FileTransfer.State.IN_PROGRESS) return;
         file_transfer.cancellable.reset();
         file_transfer.state = FileTransfer.State.IN_PROGRESS;
+        file_transfer.path = null;
+        file_transfer.transferred_bytes = 0;
+
+        InputStream? input_stream = null;
+        OutputStream? output_stream = null;
+        File? output_file = null;
+        bool complete = false;
         try {
             // Get meta info
             FileReceiveData? receive_data = file_provider.get_file_receive_data(file_transfer);
@@ -276,7 +283,7 @@ public class FileManager : StreamInteractionModule, Object {
             }
 
             InputStream download_input_stream = yield file_provider.download(file_transfer, receive_data, file_meta);
-            InputStream input_stream = download_input_stream;
+            input_stream = download_input_stream;
             if (file_decryptor != null) {
                 input_stream = yield file_decryptor.decrypt_file(input_stream, conversation, file_transfer, receive_data);
             }
@@ -289,19 +296,34 @@ public class FileManager : StreamInteractionModule, Object {
 
             // Save file
             string filename = Random.next_int().to_string("%x") + "_" + file_transfer.file_name;
-            File file = File.new_for_path(Path.build_filename(get_storage_dir(), filename));
+            output_file = File.new_for_path(Path.build_filename(get_storage_dir(), filename));
 
             // libsoup doesn't properly support splicing
-            OutputStream os = file.create(FileCreateFlags.REPLACE_DESTINATION);
+            output_stream = output_file.create(FileCreateFlags.REPLACE_DESTINATION);
             uint8[] buffer = new uint8[1024];
             ssize_t read;
+            int64 bytes_written = 0;
             while ((read = yield input_stream.read_async(buffer, Priority.LOW, file_transfer.cancellable)) > 0) {
                 buffer.length = (int) read;
-                yield os.write_async(buffer, Priority.LOW, file_transfer.cancellable);
+                yield output_stream.write_async(buffer, Priority.LOW, file_transfer.cancellable);
                 buffer.length = 1024;
+                bytes_written += read;
             }
+
+            // A clean EOF before the advertised size means the transfer was truncated.
+            // Compare source bytes for encrypted downloads, whose plaintext is shorter.
+            if (limit_stream != null && limit_stream.max_bytes >= 0) {
+                if (limit_stream.retrieved_bytes < limit_stream.max_bytes) {
+                    throw new IOError.FAILED(@"Download truncated: got $(limit_stream.retrieved_bytes) of $(limit_stream.max_bytes) bytes");
+                }
+            } else if (file_decryptor == null && file_meta.size >= 0 && bytes_written != file_meta.size) {
+                throw new IOError.FAILED(@"Download truncated: got $bytes_written of $(file_meta.size) bytes");
+            }
+
             yield input_stream.close_async(Priority.LOW, file_transfer.cancellable);
-            yield os.close_async(Priority.LOW, file_transfer.cancellable);
+            input_stream = null;
+            yield output_stream.close_async(Priority.LOW, file_transfer.cancellable);
+            output_stream = null;
 
             // Verify the hash of the downloaded file, if it is known
             var supported_hashes = Xep.CryptographicHashes.get_supported_hashes(file_transfer.hashes);
@@ -314,19 +336,18 @@ public class FileManager : StreamInteractionModule, Object {
                     hashes[checksum_type] = hash.val;
                 }
 
-                var computed_hashes = yield compute_file_hashes(file, checksum_types);
+                var computed_hashes = yield compute_file_hashes(output_file, checksum_types);
                 foreach (var checksum_type in hashes.keys) {
                     if (hashes[checksum_type] != computed_hashes[checksum_type]) {
                         warning("Hash of downloaded file does not equal advertised hash, discarding: %s. %s should be %s, was %s",
                                 file_transfer.file_name, checksum_type.to_string(), hashes[checksum_type], computed_hashes[checksum_type]);
-                        FileUtils.remove(file.get_path());
                         file_transfer.state = FileTransfer.State.FAILED;
                         return;
                     }
                 }
             }
 
-            file_transfer.path = file.get_basename();
+            file_transfer.path = output_file.get_basename();
 
             FileInfo file_info = file_transfer.get_file().query_info("*", FileQueryInfoFlags.NONE);
             if (file_info.get_content_type() != "application/octet-stream" || file_transfer.content_type == null) {
@@ -335,6 +356,7 @@ public class FileManager : StreamInteractionModule, Object {
             }
 
             file_transfer.state = FileTransfer.State.COMPLETE;
+            complete = true;
         } catch (IOError.CANCELLED e) {
             file_transfer.state = file_transfer.provider == HTTP_PROVIDER_ID || file_transfer.provider == SFS_PROVIDER_ID
                 ? FileTransfer.State.NOT_STARTED : FileTransfer.State.FAILED;
@@ -344,6 +366,28 @@ public class FileManager : StreamInteractionModule, Object {
                 file_transfer.state = FileTransfer.State.NOT_STARTED;
             } else {
                 file_transfer.state = FileTransfer.State.FAILED;
+            }
+        } finally {
+            if (input_stream != null) {
+                try {
+                    yield input_stream.close_async(Priority.LOW, null);
+                } catch (Error e) {
+                    debug("Error closing download stream: %s", e.message);
+                }
+            }
+            if (output_stream != null) {
+                try {
+                    yield output_stream.close_async(Priority.LOW, null);
+                } catch (Error e) {
+                    debug("Error closing download file: %s", e.message);
+                }
+            }
+            if (!complete && output_file != null) {
+                try {
+                    output_file.delete(null);
+                } catch (Error e) {
+                    debug("Error removing partial download: %s", e.message);
+                }
             }
         }
     }
@@ -368,7 +412,7 @@ public class FileManager : StreamInteractionModule, Object {
         file_transfer.local_time = local_time;
         file_transfer.provider = file_provider.get_id();
         file_transfer.file_name = file_meta.file_name;
-        file_transfer.size = (int)file_meta.size;
+        file_transfer.size = file_meta.size;
         file_transfer.info = info;
 
         var encryption = file_provider.get_encryption(file_transfer, receive_data, file_meta);

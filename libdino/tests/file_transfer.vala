@@ -129,6 +129,28 @@ private async void check_cancel_retry(bool during_metadata) throws Error {
     server.disconnect();
 }
 
+private async void check_truncated_download() throws Error {
+    var server = create_server();
+    server.add_handler(null, (server, message, path, query) => {
+        message.set_status(200, null);
+        message.set_response("text/plain", Soup.MemoryUse.COPY, "abc".data);
+    });
+    var transfer = create_transfer(server.get_uris().data.to_string() + "file.txt", 100000);
+    GLib.Test.expect_message("libdino", LogLevelFlags.LEVEL_WARNING, "*Download truncated*");
+    yield app.stream_interactor.get_module(FileManager.IDENTITY).download_file(transfer);
+    GLib.Test.assert_expected_messages();
+    assert_cmpint(transfer.state, CompareOperator.EQ, FileTransfer.State.NOT_STARTED);
+    assert_null(transfer.path);
+
+    // The partial file must not be left behind.
+    var enumerator = File.new_for_path(FileManager.get_storage_dir()).enumerate_children("*", FileQueryInfoFlags.NONE);
+    FileInfo? info;
+    while ((info = enumerator.next_file(null)) != null) {
+        if (info.get_name().has_suffix("file.txt")) GLib.Test.fail();
+    }
+    server.disconnect();
+}
+
 private void run_check(int check) {
     var loop = new MainLoop();
     run_check_async.begin(check, (obj, result) => {
@@ -145,6 +167,7 @@ private async void run_check_async(int check) throws Error {
         case 1: yield check_download_status(); break;
         case 2: yield check_cancel_retry(false); break;
         case 3: yield check_cancel_retry(true); break;
+        case 4: yield check_truncated_download(); break;
     }
 }
 
@@ -162,5 +185,6 @@ int main(string[] args) {
     GLib.Test.add_func("/file-transfers/download-status", () => run_check(1));
     GLib.Test.add_func("/file-transfers/cancel-retry", () => run_check(2));
     GLib.Test.add_func("/file-transfers/cancel-metadata-retry", () => run_check(3));
+    GLib.Test.add_func("/file-transfers/truncated-download", () => run_check(4));
     return GLib.Test.run();
 }
