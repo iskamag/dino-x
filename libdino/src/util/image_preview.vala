@@ -54,7 +54,16 @@ public class ImagePreview : Object {
             return decode_webp(stream, max_width, max_height, cancellable);
         }
         var pixbuf = decode_still(stream, max_width, max_height, cancellable);
-        return new ImagePreview(pixbuf.apply_embedded_orientation() ?? pixbuf);
+        var oriented = pixbuf.apply_embedded_orientation() ?? pixbuf;
+        // The pre-decode orientation scan only looks at the file prefix; enforce
+        // the requested box again after the authoritative EXIF rotation.
+        if (oriented.get_width() > max_width || oriented.get_height() > max_height) {
+            double scale = double.min((double) max_width / oriented.get_width(), (double) max_height / oriented.get_height());
+            Pixbuf? scaled = oriented.scale_simple(int.max(1, (int) (oriented.get_width() * scale)),
+                    int.max(1, (int) (oriented.get_height() * scale)), InterpType.BILINEAR);
+            if (scaled != null) oriented = scaled;
+        }
+        return new ImagePreview(oriented);
     }
 
     private static Pixbuf decode_still(InputStream input, int max_width, int max_height, Cancellable? cancellable = null) throws Error {
