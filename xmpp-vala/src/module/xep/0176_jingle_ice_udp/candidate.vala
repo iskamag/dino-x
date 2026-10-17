@@ -17,19 +17,28 @@ public class Xmpp.Xep.JingleIceUdp.Candidate {
     public Type type_;
 
     public static Candidate parse(StanzaNode node) throws Jingle.IqError {
+        string? foundation = node.get_attribute("foundation");
+        string? id = node.get_attribute("id");
+        string? ip = node.get_attribute("ip");
+        string? protocol = node.get_attribute("protocol");
+        string? type = node.get_attribute("type");
+        if (foundation == null || id == null || ip == null || protocol == null || type == null) {
+            throw new Jingle.IqError.BAD_REQUEST("ICE candidate is missing required attributes");
+        }
+
         Candidate candidate = new Candidate();
         candidate.component = (uint8) node.get_attribute_uint("component");
-        candidate.foundation = (string) node.get_attribute("foundation");
+        candidate.foundation = (!)foundation;
         candidate.generation = (uint8) node.get_attribute_uint("generation");
-        candidate.id = node.get_attribute("id");
-        candidate.ip = node.get_attribute("ip");
+        candidate.id = (!)id;
+        candidate.ip = (!)ip;
         candidate.network = (uint8) node.get_attribute_uint("network");
         candidate.port = (uint16) node.get_attribute_uint("port");
         candidate.priority = (uint32) node.get_attribute_uint("priority");
-        candidate.protocol = node.get_attribute("protocol");
+        candidate.protocol = (!)protocol;
         candidate.rel_addr = node.get_attribute("rel-addr");
         candidate.rel_port = (uint16) node.get_attribute_uint("rel-port");
-        candidate.type_ = Type.parse(node.get_attribute("type"));
+        candidate.type_ = Type.parse((!)type);
         return candidate;
     }
 
