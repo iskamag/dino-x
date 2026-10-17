@@ -300,13 +300,14 @@ public class FileManager : StreamInteractionModule, Object {
 
             // libsoup doesn't properly support splicing
             output_stream = output_file.create(FileCreateFlags.REPLACE_DESTINATION);
-            uint8[] buffer = new uint8[1024];
+            int buffer_size = 64 * 1024;
+            uint8[] buffer = new uint8[buffer_size];
             ssize_t read;
             int64 bytes_written = 0;
             while ((read = yield input_stream.read_async(buffer, Priority.LOW, file_transfer.cancellable)) > 0) {
                 buffer.length = (int) read;
                 yield output_stream.write_async(buffer, Priority.LOW, file_transfer.cancellable);
-                buffer.length = 1024;
+                buffer.length = buffer_size;
                 bytes_written += read;
             }
 

@@ -118,7 +118,7 @@ public static async HashMap<ChecksumType, string> compute_file_hashes(File file,
     }
 
     FileInputStream stream = yield file.read_async();
-    uint8 fbuf[1024];
+    uint8[] fbuf = new uint8[64 * 1024];
     size_t size;
     while ((size = yield stream.read_async(fbuf)) > 0) {
         for (int i = 0; i < checksum_types.size; i++) {
