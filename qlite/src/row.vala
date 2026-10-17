@@ -8,14 +8,9 @@ public class Row {
     private Map<string, long> int_map = new HashMap<string, long>();
     private Map<string, double?> real_map = new HashMap<string, double?>();
 
-    internal Row(Statement stmt) {
+    internal Row(Statement stmt, string[] column_names) {
         for (int i = 0; i < stmt.column_count(); i++) {
-            string column_name;
-            if (stmt.column_origin_name(i) != null) {
-                column_name = @"$(stmt.column_table_name(i)).$(stmt.column_origin_name(i))";
-            } else {
-                column_name = stmt.column_name(i);
-            }
+            string column_name = column_names[i];
             switch(stmt.column_type(i)) {
                 case TEXT:
                     text_map[column_name] = stmt.column_text(i);
@@ -88,6 +83,7 @@ public class Row {
 public class RowIterator {
     private Database db;
     private Statement stmt;
+    private string[]? column_names = null;
 
     public RowIterator.from_query_builder(Database db, QueryBuilder query) {
         this.db = db;
@@ -113,7 +109,18 @@ public class RowIterator {
     }
 
     public Row get() {
-        return new Row(stmt);
+        if (column_names == null) {
+            string[] names = new string[stmt.column_count()];
+            for (int i = 0; i < stmt.column_count(); i++) {
+                if (stmt.column_origin_name(i) != null) {
+                    names[i] = @"$(stmt.column_table_name(i)).$(stmt.column_origin_name(i))";
+                } else {
+                    names[i] = stmt.column_name(i);
+                }
+            }
+            column_names = names;
+        }
+        return new Row(stmt, (!)column_names);
     }
 
     public Row? get_next() {
