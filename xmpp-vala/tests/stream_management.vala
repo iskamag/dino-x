@@ -10,6 +10,7 @@ class StreamManagementTest : Gee.TestCase {
         add_test("explicit_cancellation_is_respected", test_explicit_cancellation);
         add_test("resume_drains_queue_after_connection_cancellation", test_cancelled_connection_queue);
         add_test("resume_failure_waits_for_bind", test_resume_failure_waits_for_bind);
+        add_test("non_resumable_connection_drains_queue", test_non_resumable_connection_drains_queue);
     }
 
     private class CaptureLog : XmppLog {
@@ -66,7 +67,7 @@ class StreamManagementTest : Gee.TestCase {
             catch (Error e) {
                 // Sessions abandoned by the resume-failure tests leave their
                 // in-flight stanzas failed asynchronously.
-                if (!e.message.contains("not acked and session not resumed")) fail_if_reached(e.message);
+                if (!e.message.contains("not acked and") && !e.message.contains("stream management is unavailable")) fail_if_reached(e.message);
             }
         });
     }
@@ -164,6 +165,27 @@ class StreamManagementTest : Gee.TestCase {
         if (stream.capture.message_ids.size > 0) fail_if_not_eq_str(stream.capture.message_ids[0], "m11");
     }
 
+    private void test_non_resumable_connection_drains_queue() {
+        var module = new Xep.StreamManagement.Module();
+        var original = enable(module);
+        for (int i = 1; i <= 20; i++) send(original, i);
+
+        module.detach(original);
+        var stream = new MemoryStream();
+        stream.add_module(module);
+        module.attach(stream);
+
+        // Bind on a stream without the SM feature: stanzas left in flight by the
+        // old session must fail instead of waiting forever, and the rest of the
+        // queue must be written without waiting for acknowledgements.
+        stream.get_module(Bind.Module.IDENTITY).bound_to_resource(stream, stream.remote_name);
+
+        fail_if_not_eq_int(stream.capture.message_ids.size, 10);
+        for (int i = 0; i < stream.capture.message_ids.size; i++) {
+            fail_if_not_eq_str(stream.capture.message_ids[i], "m%d".printf(i + 11));
+        }
+    }
+
     private void test_explicit_cancellation() {
         var module = new Xep.StreamManagement.Module();
         var original = enable(module);
@@ -174,5 +196,4 @@ class StreamManagementTest : Gee.TestCase {
         fail_if_not_eq_int(resumed.capture.message_ids.size, 0);
     }
 }
-
 }

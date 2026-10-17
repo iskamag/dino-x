@@ -63,22 +63,40 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     }
 
     internal async void write_node(XmppStream stream, StanzaNode node, int io_priority = Priority.DEFAULT, Cancellable? cancellable = null) {
-        StanzaWriter? writer = ((IoXmppStream)stream).writer;
-        if (writer == null) return;
         try {
-            stream.log.node("OUT", node, stream);
-            if (node.name == "message" || node.name == "iq" || node.name == "presence") {
-                var r_node = new StanzaNode.build("r", NS_URI).add_self_xmlns();
-                stream.log.node("OUT", r_node, stream);
-                yield ((!)writer).write_nodes(node, r_node, io_priority, cancellable);
-            } else {
-                yield ((!)writer).write_node(node, io_priority, cancellable);
-            }
+            yield write_node_or_throw(stream, node, io_priority, cancellable);
         } catch (IOError e) { }
     }
 
+    private async void write_node_or_throw(XmppStream stream, StanzaNode node, int io_priority = Priority.DEFAULT, Cancellable? cancellable = null) throws IOError {
+        StanzaWriter? writer = ((IoXmppStream)stream).writer;
+        if (writer == null) throw new IOError.NOT_CONNECTED("Stream is not connected");
+        stream.log.node("OUT", node, stream);
+        if (node.name == "message" || node.name == "iq" || node.name == "presence") {
+            var r_node = new StanzaNode.build("r", NS_URI).add_self_xmlns();
+            stream.log.node("OUT", r_node, stream);
+            yield ((!)writer).write_nodes(node, r_node, io_priority, cancellable);
+        } else {
+            yield ((!)writer).write_node(node, io_priority, cancellable);
+        }
+    }
+
+    private bool sm_active(XmppStream stream) {
+        Flag? flag = stream.get_flag(Flag.IDENTITY);
+        return session_id != null && flag != null && ((!)flag).finished;
+    }
+
+    private void fail_in_flight(string message) {
+        foreach (var id in in_flight_stanzas.keys) {
+            in_flight_stanzas[id].promise.set_exception(new IOError.FAILED(message));
+        }
+        in_flight_stanzas.clear();
+    }
+
     private void check_queue(XmppStream stream) {
-        while ((!resend_queue.is_empty || !node_queue.is_empty) && in_flight_stanzas.size < 10) {
+        bool use_acknowledgements = sm_active(stream);
+        while (!resend_queue.is_empty || !node_queue.is_empty) {
+            if (use_acknowledgements && in_flight_stanzas.size >= 10) break;
             QueueItem queue_item = !resend_queue.is_empty ? resend_queue.poll() : node_queue.poll();
             try {
                 queue_item.cancellable.set_error_if_cancelled();
@@ -88,10 +106,25 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
             }
             StanzaNode node = queue_item.node;
 
-            if (node.name == "message" || node.name == "iq" || node.name == "presence") {
-                in_flight_stanzas[++h_outbound] = queue_item;
+            if (use_acknowledgements) {
+                if (node.name == "message" || node.name == "iq" || node.name == "presence") {
+                    in_flight_stanzas[++h_outbound] = queue_item;
+                }
+                write_node.begin(stream, node, queue_item.io_priority, queue_item.cancellable);
+            } else {
+                // Without stream management there is no ack to wait for: complete
+                // the write future as soon as the stanza has been written.
+                write_without_sm.begin(stream, queue_item);
             }
-            write_node.begin(stream, node, queue_item.io_priority, queue_item.cancellable);
+        }
+    }
+
+    private async void write_without_sm(XmppStream stream, QueueItem queue_item) {
+        try {
+            yield write_node_or_throw(stream, queue_item.node, queue_item.io_priority, queue_item.cancellable);
+            queue_item.promise.set_value(null);
+        } catch (IOError e) {
+            queue_item.promise.set_exception(e);
         }
     }
 
@@ -152,7 +185,10 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
 
             h_outbound = 0;
         } else if (!stream_has_sm_feature(stream)) {
-            // No stream management on this stream: stanzas may be flushed once bound.
+            // No stream management on this stream: stanzas left unacknowledged by
+            // an earlier session can never be acknowledged now. Fail them and
+            // flush the rest once the resource is bound.
+            fail_in_flight("Stanza not acked and stream management is unavailable");
             check_queue(stream);
         }
     }
