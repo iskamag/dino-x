@@ -222,6 +222,7 @@ public class Database : Qlite.Database {
             init({id, file_sharing_id, account_id, counterpart_id, counterpart_resource, our_resource, direction,
                 time, local_time, encryption, file_name, path, mime_type, size, state, provider, info, modification_date,
                 width, height, length});
+            index("file_transfer_info_idx", {info});
         }
     }
 
