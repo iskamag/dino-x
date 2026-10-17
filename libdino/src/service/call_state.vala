@@ -44,14 +44,16 @@ public class Dino.CallState : Object {
             accepted = true;
         }
         if (call.state != Call.State.OTHER_DEVICE) {
-            Timeout.add_seconds(30, () => {
-                if (call.state == Call.State.ESTABLISHING ||
-                        (call.direction == Call.DIRECTION_INCOMING && call.state == Call.State.RINGING)) {
-                    call.state = Call.State.MISSED;
-                    terminated(call.account.bare_jid, null, null);
-                }
-                return false;
-            });
+            Dino.WeakTimeout.add_seconds_once(30, this, on_watchdog_timeout);
+        }
+    }
+
+    // Keep the watchdog from retaining a finished call for its full lifetime.
+    private static void on_watchdog_timeout(CallState call_state) {
+        if (call_state.call.state == Call.State.ESTABLISHING ||
+                (call_state.call.direction == Call.DIRECTION_INCOMING && call_state.call.state == Call.State.RINGING)) {
+            call_state.call.state = Call.State.MISSED;
+            call_state.terminated(call_state.call.account.bare_jid, null, null);
         }
     }
 
@@ -104,6 +106,10 @@ public class Dino.CallState : Object {
     }
 
     public void accept() {
+        if (!is_active()) {
+            warning("Tried to accept a call that is no longer tracked");
+            return;
+        }
         accepted = true;
         call.state = Call.State.ESTABLISHING;
 
@@ -136,6 +142,10 @@ public class Dino.CallState : Object {
     }
 
     public void reject() {
+        if (!is_active()) {
+            warning("Tried to reject a call that is no longer tracked");
+            return;
+        }
         call.state = Call.State.DECLINED;
 
         if (use_cim) {
