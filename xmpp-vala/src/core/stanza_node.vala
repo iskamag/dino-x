@@ -466,7 +466,7 @@ public class StanzaNode : StanzaEntry {
         } else {
             sb.append_printf("<%s:%s", my_state.find_name ((!)ns_uri), name);
         }
-        var attr_ns_state = new NamespaceState.with_current(my_state, (!)ns_uri);
+        var attr_ns_state = NamespaceState.with_current(my_state, (!)ns_uri);
         foreach (StanzaAttribute attr in attributes) {
             sb.append_printf(" %s", attr.to_xml(attr_ns_state));
         }

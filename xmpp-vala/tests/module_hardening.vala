@@ -10,6 +10,7 @@ class ModuleHardeningTest : Gee.TestCase {
         add_test("raw_udp_valid_candidate", test_raw_udp_valid_candidate);
         add_test("presence_empty_priority", test_presence_empty_priority);
         add_test("ice_candidate_missing_attrs", test_ice_candidate_missing_attrs);
+        add_test("namespace_scoping", test_namespace_scoping);
         add_async_test("iq_write_failure_propagates", (cb) => { test_iq_write_failure.begin(cb); });
         add_async_test("iq_request_cancellation", (cb) => { test_iq_cancellation.begin(cb); });
         add_async_test("entity_time_failure_cleans_up", (cb) => { test_entity_time_failure.begin(cb); });
@@ -153,6 +154,28 @@ class ModuleHardeningTest : Gee.TestCase {
         DateTime? second = yield time_module.query_time(stream, jid);
         fail_if_not(second == null);
         cb();
+    }
+
+    private void test_namespace_scoping() {
+        var root = new NamespaceState.for_stanza();
+        fail_if_not_eq_str(root.current_ns_uri, "jabber:client");
+        var child = root.push();
+        child.add_assoc("urn:test", "t");
+        child.set_current("urn:current");
+        fail_if_not_eq_str(child.find_uri("t"), "urn:test");
+        fail_if_not_eq_str(child.find_uri("stream"), "http://etherx.jabber.org/streams");
+        fail_if_not_eq_str(child.current_ns_uri, "urn:current");
+        fail_if_not_eq_str(root.current_ns_uri, "jabber:client");
+
+        bool missing = false;
+        try { root.find_uri("t"); } catch (IOError e) { missing = true; }
+        fail_if_not(missing);
+
+        var inner = child.push();
+        inner.set_current("urn:inner");
+        fail_if_not_eq_str(inner.current_ns_uri, "urn:inner");
+        fail_if_not_eq_str(child.current_ns_uri, "urn:current");
+        fail_if_not_eq_str(child.pop().current_ns_uri, "jabber:client");
     }
 
     private void test_ice_candidate_missing_attrs() {

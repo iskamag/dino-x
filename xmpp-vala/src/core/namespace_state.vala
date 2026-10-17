@@ -5,9 +5,19 @@ namespace Xmpp {
 public class NamespaceState {
     private HashMap<string, string> uri_to_name = new HashMap<string, string> ();
     private HashMap<string, string> name_to_uri = new HashMap<string, string> ();
-    public string current_ns_uri;
+    private string? own_current_ns_uri = null;
+    private NamespaceState? parent = null;
 
-    private NamespaceState parent;
+    public string current_ns_uri {
+        get {
+            if (own_current_ns_uri != null) return (!)own_current_ns_uri;
+            if (parent != null) return parent.current_ns_uri;
+            return XML_URI;
+        }
+        set {
+            own_current_ns_uri = value;
+        }
+    }
 
     public NamespaceState() {
         add_assoc(XMLNS_URI, "xmlns");
@@ -21,26 +31,20 @@ public class NamespaceState {
         current_ns_uri = "jabber:client";
     }
 
-    private NamespaceState.copy(NamespaceState old) {
-        foreach (string key in old.uri_to_name.keys) {
-            add_assoc(key, old.uri_to_name[key]);
-        }
-        set_current(old.current_ns_uri);
-    }
-
     private NamespaceState.with_parent(NamespaceState parent) {
-        this.copy(parent);
         this.parent = parent;
     }
 
-    public NamespaceState.with_assoc(NamespaceState old, string ns_uri, string name) {
-        this.copy(old);
-        add_assoc(ns_uri, name);
+    public static NamespaceState with_assoc(NamespaceState old, string ns_uri, string name) {
+        var ret = new NamespaceState.with_parent(old);
+        ret.add_assoc(ns_uri, name);
+        return ret;
     }
 
-    public NamespaceState.with_current(NamespaceState old, string current_ns_uri) {
-        this.copy(old);
-        set_current(current_ns_uri);
+    public static NamespaceState with_current(NamespaceState old, string current_ns_uri) {
+        var ret = new NamespaceState.with_parent(old);
+        ret.current_ns_uri = current_ns_uri;
+        return ret;
     }
 
     public void add_assoc(string ns_uri, string name) {
@@ -56,6 +60,7 @@ public class NamespaceState {
         if (uri_to_name.has_key(ns_uri)) {
             return uri_to_name[ns_uri];
         }
+        if (parent != null) return parent.find_name(ns_uri);
         throw new IOError.INVALID_DATA(@"XML: NS URI $ns_uri not found.");
     }
 
@@ -63,6 +68,7 @@ public class NamespaceState {
         if (name_to_uri.has_key(name)) {
             return name_to_uri[name];
         }
+        if (parent != null) return parent.find_uri(name);
         throw new IOError.INVALID_DATA(@"XML: NS name $name not found.");
     }
 
@@ -77,11 +83,15 @@ public class NamespaceState {
     public string to_string() {
         StringBuilder sb = new StringBuilder ();
         sb.append ("NamespaceState{");
-        foreach (string key in uri_to_name.keys) {
-            sb.append(key);
-            sb.append_c('=');
-            sb.append(uri_to_name[key]);
-            sb.append_c(',');
+        NamespaceState? state = this;
+        while (state != null) {
+            foreach (string key in state.uri_to_name.keys) {
+                sb.append(key);
+                sb.append_c('=');
+                sb.append(state.uri_to_name[key]);
+                sb.append_c(',');
+            }
+            state = state.parent;
         }
         sb.append("current=");
         sb.append(current_ns_uri);
