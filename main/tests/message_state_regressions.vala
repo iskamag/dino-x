@@ -61,6 +61,52 @@ private void test_private_room_history() {
     } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
 }
 
+private void test_dedupe_scopes_message_type() {
+    var loop = new MainLoop();
+    test_dedupe_scopes_message_type_async.begin((obj, result) => {
+        try {
+            test_dedupe_scopes_message_type_async.end(result);
+        } catch (Error e) {
+            GLib.Test.fail();
+            GLib.Test.message(e.message);
+        }
+        loop.quit();
+    });
+    loop.run();
+}
+
+private async void test_dedupe_scopes_message_type_async() throws Error {
+    var app = get_service_app();
+    var account = create_account(app);
+    app.stream_interactor.module_manager.initialize(account);
+    app.stream_interactor.account_added(account);
+    var conversations = app.stream_interactor.get_module(ConversationManager.IDENTITY);
+    var room = conversations.create_conversation(Xmpp.Jid.from_string("room@example.com"), account, Conversation.Type.GROUPCHAT);
+    var pm = conversations.create_conversation(Xmpp.Jid.from_string("room@example.com/Alice"), account, Conversation.Type.GROUPCHAT_PM);
+    var alice = Xmpp.Jid.from_string("room@example.com/Alice");
+    var now = new DateTime.now_utc();
+
+    // Same sender, body and (missing) stanza id, but a groupchat message and a PM.
+    var room_message = new Entities.Message("hi") {
+        account=account, counterpart=alice, ourpart=account.bare_jid, direction=Entities.Message.DIRECTION_RECEIVED,
+        type_=Entities.Message.Type.GROUPCHAT, time=now, local_time=now
+    };
+    var pm_message = new Entities.Message("hi") {
+        account=account, counterpart=alice, ourpart=account.bare_jid, direction=Entities.Message.DIRECTION_RECEIVED,
+        type_=Entities.Message.Type.GROUPCHAT_PM, time=now, local_time=now
+    };
+    var stanza = new Xmpp.MessageStanza() { from=alice, to=account.bare_jid };
+    stanza.body = "hi";
+
+    var processor = app.stream_interactor.get_module(MessageProcessor.IDENTITY);
+    assert_false(yield processor.received_pipeline.run(room_message, stanza, room));
+    assert_false(yield processor.received_pipeline.run(pm_message, stanza, pm));
+
+    assert_cmpint((int) app.db.message.select().with(app.db.message.account_id, "=", account.id).count(), CompareOperator.EQ, 2);
+    assert_cmpint(app.stream_interactor.get_module(MessageStorage.IDENTITY).get_messages(pm).size, CompareOperator.EQ, 1);
+    assert_cmpint(app.stream_interactor.get_module(MessageStorage.IDENTITY).get_messages(room).size, CompareOperator.EQ, 1);
+}
+
 private void check_correction_transmission(bool reload) {
     try {
         var app = get_service_app();
@@ -192,6 +238,7 @@ private void test_late_reply_widget() {
 }
 
 private void add_message_state_regression_tests() {
+    GLib.Test.add_func("/messages/dedupe-type-scope", test_dedupe_scopes_message_type);
     GLib.Test.add_func("/messages/cold-server-id", test_cold_server_id_lookup);
     GLib.Test.add_func("/messages/private-room-history", test_private_room_history);
     GLib.Test.add_func("/messages/correction-retry", () => check_correction_transmission(false));

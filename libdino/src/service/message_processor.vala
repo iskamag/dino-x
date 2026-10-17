@@ -278,6 +278,8 @@ public class MessageProcessor : StreamInteractionModule, Object {
                 .with(db.message.account_id, "=", account.id)
                 .with(db.message.counterpart_id, "=", db.get_jid_id(message.counterpart))
                 .with(db.message.body, "=", message.body)
+                .with(db.message.direction, "=", message.direction)
+                .with(db.message.type_, "=", (int) message.type_)
                 .with(db.message.time, "<", (long) message.time.add_minutes(1).to_unix())
                 .with(db.message.time, ">", (long) message.time.add_minutes(-1).to_unix());
         if (message.stanza_id != null) {
@@ -285,10 +287,18 @@ public class MessageProcessor : StreamInteractionModule, Object {
         } else {
             builder.with_null(db.message.stanza_id);
         }
-        if (message.counterpart.resourcepart != null) {
-            builder.with(db.message.counterpart_resource, "=", message.counterpart.resourcepart);
-        } else {
-            builder.with_null(db.message.counterpart_resource);
+        if (message.direction == Message.DIRECTION_RECEIVED) {
+            if (message.counterpart.resourcepart != null) {
+                builder.with(db.message.counterpart_resource, "=", message.counterpart.resourcepart);
+            } else {
+                builder.with_null(db.message.counterpart_resource);
+            }
+        } else if (message.direction == Message.DIRECTION_SENT) {
+            if (message.ourpart.resourcepart != null) {
+                builder.with(db.message.our_resource, "=", message.ourpart.resourcepart);
+            } else {
+                builder.with_null(db.message.our_resource);
+            }
         }
         return builder.count() > 0;
     }
@@ -392,7 +402,9 @@ public class MessageProcessor : StreamInteractionModule, Object {
         }
 
         public override async bool run(Entities.Message message, Xmpp.MessageStanza stanza, Conversation conversation) {
-            var flag = stream_interactor.get_stream(conversation.account).get_flag(MessageDisplayedSynchronization.Flag.IDENTITY);
+            XmppStream? stream = stream_interactor.get_stream(conversation.account);
+            if (stream == null) return false;
+            var flag = stream.get_flag(MessageDisplayedSynchronization.Flag.IDENTITY);
             if (flag != null && message.server_id != null) {
                 Jid stanza_id_by = message.type_ == Message.Type.GROUPCHAT ? conversation.counterpart.bare_jid : conversation.account.bare_jid;
                 if (flag.is_displayed(conversation.counterpart, stanza_id_by, message.server_id)) {
