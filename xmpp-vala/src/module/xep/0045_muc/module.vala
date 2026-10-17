@@ -412,9 +412,9 @@ public class Module : XmppStreamModule {
 
         ArrayList<int> status_codes = get_status_codes(x_node);
 
-        if (StatusCode.SELF_PRESENCE in status_codes) {
-            flag.remove_occupant_info(presence.from);
-        }
+        // Drop the leaving occupant's presence-scoped state. Persistent
+        // affiliations keyed by the real JID are retained.
+        flag.remove_occupant_info(presence.from);
 
         foreach (StatusCode code in USER_REMOVED_CODES) {
             if (code in status_codes) {

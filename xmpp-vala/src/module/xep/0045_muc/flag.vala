@@ -138,14 +138,10 @@ public class Flag : XmppStreamFlag {
     }
 
     internal void remove_occupant_info(Jid jid) {
-        Jid? real_jid = occupant_real_jids[jid];
         occupant_real_jids.unset(jid);
-        if (affiliations.has_key(jid.bare_jid)) {
-            HashMap<Jid, Affiliation> muc_affiliations = affiliations[jid.bare_jid];
-            muc_affiliations.unset(jid);
-            // Offline members are stored under the bare real JID.
-            if (real_jid != null) muc_affiliations.unset(real_jid.bare_jid);
-        }
+        // Only the occupancy entry goes away; affiliations keyed by the bare
+        // real JID survive while the member is offline.
+        if (affiliations.has_key(jid.bare_jid)) affiliations[jid.bare_jid].unset(jid);
         occupant_role.unset(jid);
     }
 

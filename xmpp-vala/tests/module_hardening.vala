@@ -6,6 +6,7 @@ class ModuleHardeningTest : Gee.TestCase {
         add_test("stream_management_ack_without_h", test_sm_ack_without_h);
         add_test("stream_management_resumed_without_h", test_sm_resumed_without_h);
         add_test("occupant_id_status_without_code", test_occupant_id_status_without_code);
+        add_test("muc_occupant_leave_keeps_affiliation", test_muc_occupant_leave_keeps_affiliation);
         add_test("raw_udp_invalid_candidates", test_raw_udp_invalid_candidates);
         add_test("raw_udp_valid_candidate", test_raw_udp_valid_candidate);
         add_test("presence_empty_priority", test_presence_empty_priority);
@@ -71,6 +72,54 @@ class ModuleHardeningTest : Gee.TestCase {
 
         var module = new Xep.OccupantIds.Module();
         module.parse_occupant_id_from_presence(stream, presence);
+    }
+
+    private void test_muc_occupant_leave_keeps_affiliation() {
+        var stream = new HardeningStream();
+        stream.add_module(new Presence.Module());
+        stream.add_module(new MessageModule());
+        stream.add_module(new Xep.ServiceDiscovery.Module());
+        stream.add_module(new Xep.Muc.Module());
+        stream.add_flag(new Xep.ServiceDiscovery.Flag());
+        var bind_flag = new Bind.Flag();
+        bind_flag.my_jid = Jid.from_string("me@example.org/me");
+        stream.add_flag(bind_flag);
+
+        var presence_module = stream.get_module(Presence.Module.IDENTITY);
+        presence_module.attach(stream);
+        var muc_module = stream.get_module(Xep.Muc.Module.IDENTITY);
+        muc_module.attach(stream);
+        var flag = stream.get_flag(Xep.Muc.Flag.IDENTITY);
+
+        var room = Jid.from_string("room@muc.example");
+        var alice = Jid.from_string("room@muc.example/alice");
+        var alice_real = Jid.from_string("alice@example.org");
+        flag.set_muc_nick(room.with_resource("me"));
+
+        stream.received_presence_stanza(stream, new StanzaNode.build("presence", "jabber:client")
+            .put_attribute("from", alice.to_string())
+            .put_node(new StanzaNode.build("x", Xep.Muc.NS_URI_USER)
+                .put_node(new StanzaNode.build("item", Xep.Muc.NS_URI_USER)
+                    .put_attribute("affiliation", "admin")
+                    .put_attribute("jid", alice_real.to_string())
+                    .put_attribute("role", "moderator"))));
+
+        fail_if(flag.get_affiliation(room, alice) != Xep.Muc.Affiliation.ADMIN);
+        fail_if(flag.get_affiliation(room, alice_real) != Xep.Muc.Affiliation.ADMIN);
+        fail_if(flag.get_real_jid(alice) == null);
+        fail_if(flag.get_occupant_role(alice) != Xep.Muc.Role.MODERATOR);
+
+        stream.received_presence_stanza(stream, new StanzaNode.build("presence", "jabber:client")
+            .put_attribute("from", alice.to_string())
+            .put_attribute("type", "unavailable")
+            .put_node(new StanzaNode.build("x", Xep.Muc.NS_URI_USER)));
+
+        // The occupant-specific entry goes away, the persistent real-JID
+        // affiliation stays.
+        fail_if(flag.get_real_jid(alice) != null);
+        fail_if(flag.get_occupant_role(alice) != Xep.Muc.Role.NONE);
+        fail_if(flag.get_affiliation(room, alice) != Xep.Muc.Affiliation.NONE);
+        fail_if(flag.get_affiliation(room, alice_real) != Xep.Muc.Affiliation.ADMIN);
     }
 
     private void test_raw_udp_invalid_candidates() {
