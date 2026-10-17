@@ -581,18 +581,6 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
             on_recv_rtcp_data(bytes);
             return;
         }
-#if GST_1_16
-        {
-            Gst.Buffer buffer = new Gst.Buffer.wrapped_bytes(bytes);
-            Gst.RTP.Buffer rtp_buffer;
-            uint buffer_ssrc = 0, buffer_seq = 0;
-            if (Gst.RTP.Buffer.map(buffer, Gst.MapFlags.READ, out rtp_buffer)) {
-                buffer_ssrc = rtp_buffer.get_ssrc();
-                buffer_seq = rtp_buffer.get_seq();
-                rtp_buffer.unmap();
-            }
-        }
-#endif
         if (push_recv_data) {
             prepare_remote_crypto();
 
