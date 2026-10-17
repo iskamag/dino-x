@@ -80,45 +80,69 @@ public class StanzaReader {
     }
 
     private async string read_until_ws() throws IOError {
-        var res = new StringBuilder();
         if (buffer_pos >= buffer_fill) {
             yield update_buffer();
         }
-        while (!is_ws(buffer[buffer_pos])) {
-            res.append_c((char) buffer[buffer_pos++]);
-            if (buffer_pos >= buffer_fill) {
-                yield update_buffer();
+        int start = buffer_pos;
+        var res = new StringBuilder();
+        while (true) {
+            while (buffer_pos < buffer_fill && !is_ws(buffer[buffer_pos])) {
+                buffer_pos++;
             }
+            if (buffer_pos < buffer_fill) {
+                if (res.len == 0) return ((string) buffer).substring(start, buffer_pos - start);
+                res.append(((string) buffer).substring(start, buffer_pos - start));
+                return res.str;
+            }
+            res.append(((string) buffer).substring(start, buffer_fill - start));
+            yield update_buffer();
+            start = 0;
         }
-        return res.str;
     }
 
     private async string read_until_char_or_ws(char x, char y = 0) throws IOError {
-        var res = new StringBuilder();
         if (buffer_pos >= buffer_fill) {
             yield update_buffer();
         }
-        while (buffer[buffer_pos] != x && buffer[buffer_pos] != y && !is_ws(buffer[buffer_pos])) {
-            res.append_c((char) buffer[buffer_pos++]);
-            if (buffer_pos >= buffer_fill) {
-                yield update_buffer();
+        int start = buffer_pos;
+        var res = new StringBuilder();
+        while (true) {
+            while (buffer_pos < buffer_fill) {
+                uint8 c = buffer[buffer_pos];
+                if (c == x || c == y || is_ws(c)) break;
+                buffer_pos++;
             }
+            if (buffer_pos < buffer_fill) {
+                if (res.len == 0) return ((string) buffer).substring(start, buffer_pos - start);
+                res.append(((string) buffer).substring(start, buffer_pos - start));
+                return res.str;
+            }
+            res.append(((string) buffer).substring(start, buffer_fill - start));
+            yield update_buffer();
+            start = 0;
         }
-        return res.str;
     }
 
     private async string read_until_char(char x) throws IOError {
-        var res = new StringBuilder();
         if (buffer_pos >= buffer_fill) {
             yield update_buffer();
         }
-        while (buffer[buffer_pos] != x) {
-            res.append_c((char) buffer[buffer_pos++]);
-            if (buffer_pos >= buffer_fill) {
-                yield update_buffer();
+        int start = buffer_pos;
+        var res = new StringBuilder();
+        while (true) {
+            char* found = GLibFixes.memchr((char*) buffer + buffer_pos, x, buffer_fill - buffer_pos);
+            int end = found != null ? (int) (found - (char*) buffer) : buffer_fill;
+            if (found != null) {
+                buffer_pos = end;
+                if (res.len == 0) return ((string) buffer).substring(start, end - start);
+                res.append(((string) buffer).substring(start, end - start));
+                return res.str;
             }
+            res.append(((string) buffer).substring(start, buffer_fill - start));
+            buffer_pos = buffer_fill;
+            yield update_buffer();
+            start = 0;
         }
-        return res.str;
     }
 
     private async StanzaAttribute read_attribute() throws IOError {

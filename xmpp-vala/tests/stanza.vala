@@ -10,6 +10,7 @@ class StanzaTest : Gee.TestCase {
         add_test("get_attribute_(u)int", test_get_attribute_int);
         add_test("test_encoded_val", test_encoded_val);
         add_async_test("unknown_prefix_is_opaque", (cb) => { test_unknown_prefix.begin(cb); });
+        add_async_test("values_spanning_buffer_refills", (cb) => { test_buffer_refills.begin(cb); });
     }
 
     private async void test_node_one(Gee.TestFinishedCallback cb) {
@@ -131,6 +132,18 @@ class StanzaTest : Gee.TestCase {
         fail_if_not_eq_node(node2_cmp, yield reader.read_node());
         yield reader.read_node();
         yield fail_if_not_end_of_stream(reader);
+        cb();
+    }
+
+    private async void test_buffer_refills(Gee.TestFinishedCallback cb) {
+        string long_value = string.nfill(10000, 'a');
+        var xml = "<message xmlns='jabber:client' note='" + long_value + "'><body>" + long_value + "</body></message>";
+        var reader = new StanzaReader.for_stream(new MemoryInputStream.from_data(xml.data, null));
+        var node = yield reader.read_node();
+        fail_if_not_eq_str(node.get_attribute("note"), long_value);
+        StanzaNode? body = node.get_subnode("body");
+        if (fail_if(body == null)) { cb(); return; }
+        fail_if_not_eq_str(body.get_string_content(), long_value);
         cb();
     }
 

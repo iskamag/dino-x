@@ -1,6 +1,9 @@
 [CCode (cprefix = "G", gir_namespace = "Gio", gir_version = "2.0", lower_case_cprefix = "g_")]
 namespace GLibFixes {
 
+    [CCode (cname = "memchr", cheader_filename = "string.h")]
+    public static unowned char* memchr(char* s, int c, size_t n);
+
     [CCode (cheader_filename = "gio/gio.h", type_id = "g_resolver_get_type ()")]
     public class Resolver : GLib.Object {
         [CCode (has_construct_function = false)]
