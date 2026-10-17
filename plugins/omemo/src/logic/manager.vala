@@ -355,6 +355,9 @@ public class Manager : StreamInteractionModule, Object {
     }
 
     private void on_account_removed(Account account) {
+        // Cancel retry timers now, while the id is still valid.
+        reset_retries(account);
+        int account_id = account.id;
         // account_removed is also emitted for "reconnect" and "disable account"
         // (StreamInteractor.disconnect_account). Only drop the revival states
         // once the account row is really gone.
@@ -371,7 +374,7 @@ public class Manager : StreamInteractionModule, Object {
                     message_states.unset(msg);
                 }
             }
-            reset_retries(account);
+            reset_retries_for_id(account_id);
             return false;
         });
     }
@@ -500,7 +503,11 @@ public class Manager : StreamInteractionModule, Object {
     }
 
     private void reset_retries(Account account) {
-        string prefix = account.id.to_string() + "/";
+        reset_retries_for_id(account.id);
+    }
+
+    private void reset_retries_for_id(int account_id) {
+        string prefix = account_id.to_string() + "/";
         var devicelist_keys = new ArrayList<string>();
         foreach (var key in devicelist_retry_timeouts.keys) {
             if (key.has_prefix(prefix)) devicelist_keys.add(key);

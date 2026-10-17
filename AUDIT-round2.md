@@ -270,6 +270,24 @@ re-sent on room rejoin (pre-existing).
 
 ---
 
+## Final verification
+
+- Three review rounds by two independent read-only subagents (correctness/
+  security/state-machine and performance/leaks/UI/tests). Final verdicts:
+  **merge, no blocking findings**.
+- The reviewers' final residual notes: encrypted *file* messages have no
+  deletion hook (pre-existing, files are not in `message_states`); a MUC
+  message can be sent by the resume path before the room is rejoined (the
+  server may reject it; pre-existing MUC resend gap); the
+  `NO_TRUSTED_DEVICE` status is not recomputed after accepting a key until the
+  encryption setting is toggled or the conversation is switched (pre-existing
+  refresh model). None gate the merge.
+- `ninja -C build` clean; `meson test -C build`: 7/7 targets pass (xmpp-vala,
+  file transfers, OpenPGP database, OpenPGP file crypto, Crypto SRTP, OMEMO,
+  image previews).
+
+---
+
 ## API and behaviour notes
 
 - `Pubsub.OnResult` now takes a nullable `Jid?` (the requester JID is used when
