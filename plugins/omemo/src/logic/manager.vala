@@ -286,7 +286,18 @@ public class Manager : StreamInteractionModule, Object {
         }
 
         //Update the database with the appropriate trust information
-        db.identity_meta.insert_device_bundle(identity_id, jid.bare_jid.to_string(), device_id, bundle, trusted);
+        if (db.identity_meta.insert_device_bundle(identity_id, jid.bare_jid.to_string(), device_id, bundle, trusted) < 0) {
+            critical("Refusing to start a session for %s/%d: identity key changed", jid.bare_jid.to_string(), device_id);
+            db.identity_meta.update()
+                .with(db.identity_meta.identity_id, "=", identity_id)
+                .with(db.identity_meta.address_name, "=", jid.bare_jid.to_string())
+                .with(db.identity_meta.device_id, "=", device_id)
+                .set(db.identity_meta.trust_level, TrustLevel.UNKNOWN)
+                .perform();
+            trust_manager.bad_message_state_updated(account, jid, device_id);
+            continue_message_sending(account, jid);
+            return;
+        }
 
         if (should_start_session(account, jid)) {
             XmppStream? stream = stream_interactor.get_stream(account);
