@@ -142,6 +142,14 @@ class StanzaTest : Gee.TestCase {
         attr.encoded_val = "b&quot;a&lt;&apos;&gt;r&amp;me";
         fail_if_not_eq_str(attr.val, "b\"a<'>r&me");
         fail_if_not_eq_str(attr.encoded_val, "b&quot;a&lt;&apos;&gt;r&amp;me");
+
+        var plain = new StanzaAttribute.build("ns", "plain value", "plain value");
+        fail_if_not_eq_str(plain.encoded_val, "plain value");
+
+        var numeric = new StanzaAttribute.build("ns", "v", "");
+        numeric.encoded_val = "&#65;&#x42;&bogus;&#xZZ;";
+        fail_if_not_eq_str(numeric.val, "AB&bogus;&#xZZ;");
+        fail_if_not_eq_str(numeric.encoded_val, "AB&amp;bogus;&amp;#xZZ;");
     }
 
     private void test_get_attribute_int() {
