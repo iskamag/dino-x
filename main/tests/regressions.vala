@@ -134,7 +134,7 @@ private void test_large_image_groups() {
             assert_cmpint(images.size, CompareOperator.EQ, count);
             for (int i = 0; i < count; i++) {
                 assert_cmpint((int) image_progress(images[i]).file_size, CompareOperator.EQ, 1024 + i);
-                assert_nonnull(image_stack(images[i]).visible_child);
+                wait_for_stack_child(image_stack(images[i]), typeof(FixedRatioPicture));
             }
             group.dispose();
             foreach (var image in images) assert_null(image.get_first_child());

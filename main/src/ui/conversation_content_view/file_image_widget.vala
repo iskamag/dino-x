@@ -220,37 +220,63 @@ public class FileImageWidget : Widget {
         }
     }
 
+    private class ThumbnailRequest : Object {
+        public Gee.List<Xep.JingleContentThumbnails.Thumbnail> thumbnails;
+        public int image_width;
+        public int image_height;
+    }
+
     public async void load_from_thumbnail(FileTransfer file_transfer) throws GLib.Error {
         this.file_transfer = file_transfer;
 
-        Gdk.Pixbuf? pixbuf = null;
-        foreach (Xep.JingleContentThumbnails.Thumbnail thumbnail in file_transfer.thumbnails) {
-            pixbuf = parse_thumbnail(thumbnail);
-            if (pixbuf != null) {
-                break;
+        var request = new ThumbnailRequest() {
+            thumbnails = file_transfer.thumbnails,
+            image_width = file_transfer.width,
+            image_height = file_transfer.height
+        };
+        var task = new GLib.Task(request, preview_cancellable, (source, result) => load_from_thumbnail.callback());
+        task.run_in_thread((task, source, data, cancellable) => {
+            try {
+                var pixbuf = decode_thumbnail((ThumbnailRequest) source);
+                var value = Value(typeof(Pixbuf));
+                value.set_object(pixbuf);
+                task.return_value(value);
+            } catch (Error e) {
+                task.return_error((owned) e);
             }
-        }
-        if (pixbuf == null) {
-            warning("Can't load thumbnails of file %s", file_transfer.file_name);
-            throw new Error(-1, 0, "Error loading preview image");
-        }
-        // TODO: should this be executed? If yes, before or after scaling
-        pixbuf = pixbuf.apply_embedded_orientation();
-
-        if (file_transfer.width > 0 && file_transfer.height > 0) {
-            double scale = double.min(1, double.min(600.0 / file_transfer.width, 300.0 / file_transfer.height));
-            pixbuf = pixbuf.scale_simple(int.max(1, (int) (file_transfer.width * scale)),
-                int.max(1, (int) (file_transfer.height * scale)), InterpType.BILINEAR);
-        } else {
-            warning("Preview: Not scaling image, width: %d, height: %d\n", file_transfer.width, file_transfer.height);
-        }
-        if (pixbuf == null) {
-            warning("Can't scale thumbnail %s", file_transfer.file_name);
-            throw new Error(-1, 0, "Error scaling preview image");
-        }
+        });
+        yield;
+        Value result;
+        task.propagate_value(out result);
 
         if (disposed) return;
-        set_picture(pixbuf);
+        set_picture((Pixbuf) result.get_object());
+    }
+
+    private static Pixbuf decode_thumbnail(ThumbnailRequest request) throws Error {
+        Pixbuf? pixbuf = null;
+        foreach (Xep.JingleContentThumbnails.Thumbnail thumbnail in request.thumbnails) {
+            pixbuf = parse_thumbnail(thumbnail);
+            if (pixbuf != null) break;
+        }
+        if (pixbuf == null) {
+            warning("Can't load thumbnails of file");
+            throw new Error(-1, 0, "Error loading preview image");
+        }
+
+        int target_width = pixbuf.width;
+        int target_height = pixbuf.height;
+        if (request.image_width > 0 && request.image_height > 0) {
+            double scale = double.min(1, double.min(600.0 / request.image_width, 300.0 / request.image_height));
+            target_width = int.max(1, (int) (request.image_width * scale));
+            target_height = int.max(1, (int) (request.image_height * scale));
+        }
+        // Never upscale the thumbnail; only shrink it to the display box.
+        if (target_width < pixbuf.width || target_height < pixbuf.height) {
+            pixbuf = pixbuf.scale_simple(target_width, target_height, InterpType.BILINEAR);
+        }
+        if (pixbuf == null) throw new Error(-1, 0, "Error scaling preview image");
+        return pixbuf;
     }
 
     private void set_picture(Pixbuf pixbuf) {

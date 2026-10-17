@@ -46,6 +46,15 @@ private void test_scaling() {
     } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
 }
 
+private void test_orientation_scaling() {
+    try {
+        var image = preview("orientation-6.jpg", 60, 30);
+        assert_true(image.pixbuf.width <= 60);
+        assert_true(image.pixbuf.height <= 30);
+        assert_true(image.pixbuf.height > image.pixbuf.width);
+    } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
+}
+
 private void test_webp_alpha() {
     try {
         var image = preview("animated-alpha.webp");
@@ -199,6 +208,26 @@ private void test_grouped_images() {
         var images = new Gee.ArrayList<FileImageWidget>();
         collect_images(group, images);
         assert_cmpint(images.size, CompareOperator.EQ, 3);
+        var loop = new MainLoop();
+        bool ready = false;
+        uint timeout_id = 0;
+        uint check_id = 0;
+        timeout_id = Timeout.add_seconds(5, () => { timeout_id = 0; loop.quit(); return Source.REMOVE; });
+        check_id = Timeout.add(10, () => {
+            foreach (var image in images) {
+                var overlay = image.get_first_child() as Gtk.Overlay;
+                var stack = overlay.child as Gtk.Stack;
+                if (stack.visible_child == null) return Source.CONTINUE;
+            }
+            ready = true;
+            check_id = 0;
+            loop.quit();
+            return Source.REMOVE;
+        });
+        loop.run();
+        if (timeout_id != 0) Source.remove(timeout_id);
+        if (check_id != 0) Source.remove(check_id);
+        assert_true(ready);
         foreach (var image in images) {
             var overlay = image.get_first_child() as Gtk.Overlay;
             var stack = overlay.child as Gtk.Stack;
@@ -278,6 +307,7 @@ int main(string[] args) {
     if (have_display) Adw.init();
     GLib.Test.add_func("/preview/formats", test_formats);
     GLib.Test.add_func("/preview/scaling", test_scaling);
+    GLib.Test.add_func("/preview/orientation-scaling", test_orientation_scaling);
     GLib.Test.add_func("/preview/webp-alpha", test_webp_alpha);
     GLib.Test.add_func("/preview/webp-offset", test_webp_offset);
     GLib.Test.add_func("/preview/first-frame-only", test_later_frames_not_decoded);

@@ -53,13 +53,28 @@ public class ImagePreview : Object {
         if (matches(prefix, 0, "RIFF") && matches(prefix, 8, "WEBP")) {
             return decode_webp(stream, max_width, max_height, cancellable);
         }
-        return new ImagePreview(decode_still(stream, max_width, max_height, cancellable).apply_embedded_orientation());
+        var pixbuf = decode_still(stream, max_width, max_height, cancellable);
+        return new ImagePreview(pixbuf.apply_embedded_orientation() ?? pixbuf);
     }
 
-    private static Pixbuf decode_still(InputStream stream, int max_width, int max_height, Cancellable? cancellable) throws Error {
+    private static Pixbuf decode_still(InputStream input, int max_width, int max_height, Cancellable? cancellable = null) throws Error {
+        BufferedInputStream stream;
+        if (input is BufferedInputStream) {
+            stream = (BufferedInputStream) input;
+        } else {
+            stream = new BufferedInputStream.sized(input, 4096);
+        }
+        while (stream.peek_buffer().length < 4096 && stream.fill(4096 - stream.peek_buffer().length, cancellable) > 0) {
+        }
+        int orientation = read_orientation(stream.peek_buffer());
         var loader = new PixbufLoader();
         loader.size_prepared.connect((loader, width, height) => {
-            double scale = double.min(1, double.min((double) max_width / width, (double) max_height / height));
+            // EXIF orientations 5-8 rotate by 90 degrees, so the bounding box
+            // used for scaling has swapped dimensions.
+            bool swapped = orientation >= 5 && orientation <= 8;
+            int prepared_width = swapped ? height : width;
+            int prepared_height = swapped ? width : height;
+            double scale = double.min(1, double.min((double) max_width / prepared_width, (double) max_height / prepared_height));
             loader.set_size(int.max(1, (int) (width * scale)), int.max(1, (int) (height * scale)));
         });
         bool closed = false;
@@ -79,6 +94,66 @@ public class ImagePreview : Object {
                 } catch (Error e) { }
             }
         }
+    }
+
+    private static int read_orientation(uint8[] data) {
+        if (data.length < 4 || data[0] != 0xFF || data[1] != 0xD8) return 1;
+        int pos = 2;
+        while (pos + 4 <= data.length) {
+            if (data[pos] != 0xFF) return 1;
+            uint8 marker = data[pos + 1];
+            if (marker == 0xD8 || marker == 0xD9) {
+                pos += 2;
+                continue;
+            }
+            if (marker == 0xDA) break;
+            int length = (data[pos + 2] << 8) | data[pos + 3];
+            if (length < 2 || pos + 2 + length > data.length) break;
+            if (marker == 0xE1 && length >= 8 && matches(data, pos + 4, "Exif\0\0")) {
+                return read_tiff_orientation(data, pos + 10, pos + 2 + length);
+            }
+            pos += 2 + length;
+        }
+        return 1;
+    }
+
+    private static uint read_u16(uint8[] data, int offset, int limit, bool little_endian) {
+        if (offset + 2 > limit) return 0;
+        if (little_endian) return data[offset] | (data[offset + 1] << 8);
+        return (data[offset] << 8) | data[offset + 1];
+    }
+
+    private static uint read_u32(uint8[] data, int offset, int limit, bool little_endian) {
+        if (offset + 4 > limit) return 0;
+        if (little_endian) {
+            return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24);
+        }
+        return (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3];
+    }
+
+    private static int read_tiff_orientation(uint8[] data, int offset, int limit) {
+        if (offset + 8 > limit) return 1;
+        bool little_endian;
+        if (data[offset] == 'I' && data[offset + 1] == 'I') {
+            little_endian = true;
+        } else if (data[offset] == 'M' && data[offset + 1] == 'M') {
+            little_endian = false;
+        } else {
+            return 1;
+        }
+        if (read_u16(data, offset + 2, limit, little_endian) != 42) return 1;
+        int ifd = offset + (int) read_u32(data, offset + 4, limit, little_endian);
+        if (ifd + 2 > limit) return 1;
+        int entries = (int) read_u16(data, ifd, limit, little_endian);
+        for (int i = 0; i < entries; i++) {
+            int entry = ifd + 2 + i * 12;
+            if (entry + 12 > limit) break;
+            if (read_u16(data, entry, limit, little_endian) == 0x0112) {
+                int value = (int) read_u16(data, entry + 8, limit, little_endian);
+                return value >= 1 && value <= 8 ? value : 1;
+            }
+        }
+        return 1;
     }
 
     private static bool matches(uint8[] data, int offset, string text) {
