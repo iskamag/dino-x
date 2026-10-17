@@ -266,7 +266,8 @@ public class Dino.Plugins.Rtp.Device : MediaDevice, Object {
                 if (bitrate < 0.75 * current_target_bitrate && active_caps_width > common_widths[0]) {
                     // Lower video resolution
                     int i = 1;
-                    for(; i < common_widths.length && common_widths[i] < active_caps_width; i++);if (common_widths[i] != active_caps_width) {
+                    for(; i < common_widths.length && common_widths[i] < active_caps_width; i++);
+                    if (i < common_widths.length && common_widths[i] != active_caps_width) {
                         debug("Decrease resolution to ensure target bitrate (%u) is in reach (current resolution target bitrate is %f)", bitrate, current_target_bitrate);
                     }
                     apply_width(payload_type, common_widths[i-1], bitrate);
@@ -274,13 +275,14 @@ public class Dino.Plugins.Rtp.Device : MediaDevice, Object {
                     // Higher video resolution
                     int i = 0;
                     for(; i < common_widths.length && common_widths[i] <= active_caps_width; i++);
-                    if (common_widths[i] != active_caps_width) {
-                        debug("Increase resolution to make use of available bandwidth of target bitrate (%u) (current resolution target bitrate is %f)", bitrate, current_target_bitrate);
-                    }
-                    if (common_widths[i] > device_caps_width) {
+                    if (i >= common_widths.length) {
+                        // No larger common width; use the device's native size.
+                        apply_width(payload_type, device_caps_width, bitrate);
+                    } else if (common_widths[i] > device_caps_width) {
                         // We never scale up, so just stick with what the device gives
                         apply_width(payload_type, device_caps_width, bitrate);
                     } else if (common_widths[i] != active_caps_width) {
+                        debug("Increase resolution to make use of available bandwidth of target bitrate (%u) (current resolution target bitrate is %f)", bitrate, current_target_bitrate);
                         apply_width(payload_type, common_widths[i], bitrate);
                     }
                 }
