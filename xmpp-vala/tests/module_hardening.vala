@@ -9,6 +9,8 @@ class ModuleHardeningTest : Gee.TestCase {
         add_test("raw_udp_invalid_candidates", test_raw_udp_invalid_candidates);
         add_test("raw_udp_valid_candidate", test_raw_udp_valid_candidate);
         add_test("presence_empty_priority", test_presence_empty_priority);
+        add_async_test("iq_write_failure_propagates", (cb) => { test_iq_write_failure.begin(cb); });
+        add_async_test("iq_request_cancellation", (cb) => { test_iq_cancellation.begin(cb); });
     }
 
     private class HardeningStream : IoXmppStream {
@@ -92,6 +94,46 @@ class ModuleHardeningTest : Gee.TestCase {
         parameters.own_candidates.add(parameters.remote_candidates[0]);
         var xml = parameters.to_transport_stanza_node("transport-info");
         fail_if_not_eq_str(xml.get_subnode("candidate", Xep.JingleRawUdp.NS_URI).get_attribute("component"), "1");
+    }
+
+    private class FailingWriteStream : HardeningStream {
+        public override async void write_async(StanzaNode node, int io_priority = Priority.DEFAULT, Cancellable? cancellable = null) throws IOError {
+            throw new IOError.FAILED("write failed");
+        }
+    }
+
+    private async void test_iq_write_failure(Gee.TestFinishedCallback cb) {
+        var stream = new FailingWriteStream();
+        var module = new Iq.Module();
+        stream.add_module(module);
+        module.attach(stream);
+        var iq = new Iq.Stanza.get(new StanzaNode.build("ping", "urn:xmpp:ping").add_self_xmlns());
+        bool failed = false;
+        try {
+            yield module.send_iq_async(stream, iq);
+        } catch (IOError e) {
+            failed = true;
+        }
+        fail_if_not(failed, "IQ write error was not propagated");
+        cb();
+    }
+
+    private async void test_iq_cancellation(Gee.TestFinishedCallback cb) {
+        var stream = new HardeningStream();
+        var module = new Iq.Module();
+        stream.add_module(module);
+        module.attach(stream);
+        var iq = new Iq.Stanza.get(new StanzaNode.build("ping", "urn:xmpp:ping").add_self_xmlns());
+        var cancellable = new Cancellable();
+        Timeout.add(10, () => { cancellable.cancel(); return false; });
+        bool cancelled = false;
+        try {
+            yield module.send_iq_async(stream, iq, Priority.DEFAULT, cancellable);
+        } catch (IOError.CANCELLED e) {
+            cancelled = true;
+        }
+        fail_if_not(cancelled, "cancelled IQ request did not return");
+        cb();
     }
 
     private void test_presence_empty_priority() {

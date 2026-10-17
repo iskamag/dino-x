@@ -16,24 +16,39 @@ namespace Xmpp.Iq {
             assert(iq.type_ == Iq.Stanza.TYPE_GET || iq.type_ == Iq.Stanza.TYPE_SET);
 
             preprocess_outgoing_iq_set_get(stream, iq);
-            Iq.Stanza? return_stanza = null;
+            var promise = new Promise<Iq.Stanza?>();
             responseListeners[iq.id] = new ResponseListener((_, result_iq) => {
-                return_stanza = result_iq;
-                if (cancellable == null || !cancellable.is_cancelled()) {
-                    Idle.add(send_iq_async.callback);
-                }
+                promise.set_value(result_iq);
             });
-            stream.write_async(iq.stanza, io_priority, cancellable);
             ulong cancelled_handler_id = 0;
             if (cancellable != null) {
-                cancelled_handler_id = cancellable.cancelled.connect(() => Idle.add(send_iq_async.callback));
+                cancelled_handler_id = cancellable.cancelled.connect(() => {
+                    Idle.add(() => {
+                        if (!promise.future.ready) {
+                            promise.set_exception(new IOError.CANCELLED("IQ request cancelled"));
+                        }
+                        return false;
+                    });
+                });
             }
-            yield;
-            if (cancellable != null) {
-                cancellable.disconnect(cancelled_handler_id);
-                cancellable.set_error_if_cancelled();
+            try {
+                yield stream.write_async(iq.stanza, io_priority, cancellable);
+            } catch (IOError e) {
+                responseListeners.unset(iq.id);
+                if (cancellable != null) cancellable.disconnect(cancelled_handler_id);
+                throw e;
             }
-            return return_stanza;
+            try {
+                return yield promise.future.wait_async();
+            } catch (FutureError e) {
+                if (e is FutureError.EXCEPTION && promise.future.exception is IOError) {
+                    throw (IOError) promise.future.exception;
+                }
+                throw new IOError.FAILED("IQ request failed: %s".printf(e.message));
+            } finally {
+                responseListeners.unset(iq.id);
+                if (cancellable != null) cancellable.disconnect(cancelled_handler_id);
+            }
         }
 
         public delegate void OnResult(XmppStream stream, Iq.Stanza iq);

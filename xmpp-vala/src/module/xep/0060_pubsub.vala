@@ -123,14 +123,12 @@ namespace Xmpp.Xep.Pubsub {
                     .put_node(new StanzaNode.build("item", NS_URI).put_attribute("id", item_id)));
 
             Iq.Stanza iq = new Iq.Stanza.set(pubsub_node);
-            bool ok = true;
-            stream.get_module(Iq.Module.IDENTITY).send_iq(stream, iq, (stream, result_iq) => {
-                ok = !result_iq.is_error();
-                Idle.add(retract_item.callback);
-            });
-            yield;
-
-            return ok;
+            try {
+                Iq.Stanza result_iq = yield stream.get_module(Iq.Module.IDENTITY).send_iq_async(stream, iq);
+                return !result_iq.is_error();
+            } catch (IOError e) {
+                return false;
+            }
         }
 
         public void delete_node(XmppStream stream, Jid? jid, string node_id) {

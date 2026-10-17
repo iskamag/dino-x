@@ -63,7 +63,11 @@ class StreamManagementTest : Gee.TestCase {
         stream.write_async.begin(stanza, priority, cancellable, (obj, result) => {
             try { stream.write_async.end(result); }
             catch (IOError.CANCELLED e) {}
-            catch (Error e) { fail_if_reached(e.message); }
+            catch (Error e) {
+                // Sessions abandoned by the resume-failure tests leave their
+                // in-flight stanzas failed asynchronously.
+                if (!e.message.contains("not acked and session not resumed")) fail_if_reached(e.message);
+            }
         });
     }
 
@@ -157,7 +161,7 @@ class StreamManagementTest : Gee.TestCase {
 
         module.on_enabled(stream, new StanzaNode.build("enabled", Xep.StreamManagement.NS_URI).put_attribute("id", "new-session"));
         fail_if_not_eq_int(stream.capture.message_ids.size, 1);
-        fail_if_not_eq_str(stream.capture.message_ids[0], "m11");
+        if (stream.capture.message_ids.size > 0) fail_if_not_eq_str(stream.capture.message_ids[0], "m11");
     }
 
     private void test_explicit_cancellation() {
