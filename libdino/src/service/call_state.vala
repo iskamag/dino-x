@@ -21,6 +21,11 @@ public class Dino.CallState : Object {
     public ArrayList<Jid> cim_jids_to_inform = new ArrayList<Jid>();
     public string cim_message_type { get; set; default=Xmpp.MessageStanza.TYPE_CHAT; }
 
+    internal bool is_active() {
+        return stream_interactor.get_module(Calls.IDENTITY).call_states.has_key(call) &&
+                (call.state == Call.State.RINGING || call.state == Call.State.ESTABLISHING);
+    }
+
     public Xep.Muji.GroupCall? group_call { get; set; }
     public bool we_should_send_audio { get; set; default=false; }
     public bool we_should_send_video { get; set; default=false; }
@@ -56,10 +61,13 @@ public class Dino.CallState : Object {
 
         if (this.group_call == null) yield convert_into_group_call();
         if (this.group_call == null) return;
-        // The user might have retracted the call in the meanwhile
-        if (this.call.state != Call.State.RINGING) return;
 
-        XmppStream stream = stream_interactor.get_stream(call.account);
+        XmppStream? stream = stream_interactor.get_stream(call.account);
+        // The user might have retracted the call in the meanwhile
+        if (!is_active() || this.call.state != Call.State.RINGING) {
+            if (stream != null) leave_group_call((!)stream, group_call.muc_jid);
+            return;
+        }
         if (stream == null) return;
 
         Gee.List<Jid> occupants = stream_interactor.get_module(MucManager.IDENTITY).get_other_occupants(muc, call.account);
@@ -364,9 +372,20 @@ public class Dino.CallState : Object {
 
         debug("[%s] Converting call to groupcall %s", call.account.bare_jid.to_string(), muc_jid.to_string());
         yield join_group_call(muc_jid);
+        if (!is_active()) {
+            leave_group_call(stream, muc_jid);
+            return;
+        }
 
         Xep.DataForms.DataForm? data_form = yield stream_interactor.get_module(MucManager.IDENTITY).get_config_form(call.account, muc_jid);
-        if (data_form == null) return;
+        if (!is_active()) {
+            leave_group_call(stream, muc_jid);
+            return;
+        }
+        if (data_form == null) {
+            leave_group_call(stream, muc_jid);
+            return;
+        }
 
         foreach (Xep.DataForms.DataForm.Field field in data_form.fields) {
             switch (field.var) {
@@ -393,10 +412,21 @@ public class Dino.CallState : Object {
             }
         }
         yield stream_interactor.get_module(MucManager.IDENTITY).set_config_form(call.account, muc_jid, data_form);
+        if (!is_active()) {
+            leave_group_call(stream, muc_jid);
+            return;
+        }
 
         foreach (Jid peer_jid in peers.keys) {
             debug("[%s] Group call inviting %s", call.account.bare_jid.to_string(), peer_jid.to_string());
             yield invite_to_call(peer_jid);
+        }
+    }
+
+    private void leave_group_call(XmppStream stream, Jid muc_jid) {
+        if (group_call != null) {
+            stream.get_module(Xep.Muc.Module.IDENTITY).exit(stream, muc_jid);
+            group_call = null;
         }
     }
 

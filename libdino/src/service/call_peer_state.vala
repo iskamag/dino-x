@@ -113,6 +113,11 @@ public class Dino.PeerState : Object {
         if (sid == null) sid = Xmpp.random_uuid();
 
         Xep.Jingle.Session session = yield stream.get_module(Xep.JingleRtp.Module.IDENTITY).start_call(stream, full_jid, we_should_send_video, sid, group_call != null ? group_call.muc_jid : null);
+        if (!call_state.is_active()) {
+            // The call was hung up while the setup was in flight.
+            session.terminate(Xep.Jingle.ReasonElement.CANCEL, null, "cancel");
+            return;
+        }
         set_session(session);
     }
 
