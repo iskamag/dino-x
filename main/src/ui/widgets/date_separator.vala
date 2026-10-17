@@ -4,13 +4,13 @@ public class Dino.Ui.ViewModel.DateSeparatorModel : Object {
     public string date_label { get; set; }
 }
 
-public class Dino.Ui.ViewModel.CompatDateSeparatorModel : DateSeparatorModel {
+public class Dino.Ui.ViewModel.CompatDateSeparatorModel : DateSeparatorModel, Dino.Ui.RelativeTimeTarget {
     private DateTime date;
-    private uint time_update_timeout = 0;
 
     public CompatDateSeparatorModel(DateTime date) {
         this.date = date;
         update_time_label();
+        Dino.Ui.RelativeTimeUpdater.register(this);
     }
 
     private static string get_relative_time(DateTime time) {
@@ -38,27 +38,22 @@ public class Dino.Ui.ViewModel.CompatDateSeparatorModel : DateSeparatorModel {
         }
     }
 
-    private static void on_time_update_timeout(CompatDateSeparatorModel self) {
-        if (self.time_update_timeout != 0) self.update_time_label();
-    }
-
     private void update_time_label() {
         date_label = get_relative_time(date);
-        time_update_timeout = Dino.WeakTimeout.add_seconds_once(get_next_time_change(), this, on_time_update_timeout);
     }
 
-    private int get_next_time_change() {
+    public int seconds_until_update() {
         DateTime now = new DateTime.now_local();
         return (23 - now.get_hour()) * 3600 + (59 - now.get_minute()) * 60 + (59 - now.get_second()) + 1;
     }
 
-    public override void dispose() {
-        base.dispose();
+    public void update_relative_time() {
+        update_time_label();
+    }
 
-        if (time_update_timeout != 0) {
-            Source.remove(time_update_timeout);
-            time_update_timeout = 0;
-        }
+    public override void dispose() {
+        Dino.Ui.RelativeTimeUpdater.unregister(this);
+        base.dispose();
     }
 }
 

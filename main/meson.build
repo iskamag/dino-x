@@ -80,6 +80,7 @@ sources = files(
     'src/ui/util/helper.vala',
     'src/ui/util/leak.vala',
     'src/ui/util/preference_group.vala',
+    'src/ui/util/relative_time_updater.vala',
     'src/ui/util/size_request_box.vala',
     'src/ui/util/sizing_bin.vala',
     'src/ui/widgets/avatar_picture.vala',

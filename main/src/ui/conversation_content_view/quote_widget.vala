@@ -7,7 +7,7 @@ using Dino.Entities;
 
 namespace Dino.Ui.Quote {
 
-    public class Model : Object {
+    public class Model : Object, Dino.Ui.RelativeTimeTarget {
         public signal void aborted();
         public signal void jump_to();
 
@@ -21,8 +21,6 @@ namespace Dino.Ui.Quote {
         public Jid author_jid { get; set; }
 
         public bool can_abort { get; set; default=false; }
-
-        private uint display_time_timeout;
 
         public Model.from_content_item(ContentItem content_item, Conversation conversation, StreamInteractor stream_interactor) {
             this.display_name = Util.get_participant_display_name(stream_interactor, conversation, content_item.jid, true);
@@ -39,28 +37,28 @@ namespace Dino.Ui.Quote {
             }
             this.message_time = content_item.time;
             update_display_time();
+            Dino.Ui.RelativeTimeUpdater.register(this);
 
             this.stream_interactor = stream_interactor;
             this.conversation = conversation;
             this.author_jid = content_item.jid;
         }
 
-        private void on_display_time_timeout() {
-            if (display_time_timeout != 0) update_display_time();
-        }
-
         private void update_display_time() {
             this.display_time = ConversationItemSkeleton.get_relative_time(message_time.to_local());
-            display_time_timeout = Dino.WeakTimeout.add_seconds_once((int) ConversationItemSkeleton.get_next_time_change(message_time), this, on_display_time_timeout);
+        }
+
+        public int seconds_until_update() {
+            return Dino.Ui.RelativeTimeUpdater.get_next_time_change(message_time);
+        }
+
+        public void update_relative_time() {
+            update_display_time();
         }
 
         public override void dispose() {
+            Dino.Ui.RelativeTimeUpdater.unregister(this);
             base.dispose();
-
-            if (display_time_timeout != 0) {
-                Source.remove(display_time_timeout);
-                display_time_timeout = 0;
-            }
         }
     }
 

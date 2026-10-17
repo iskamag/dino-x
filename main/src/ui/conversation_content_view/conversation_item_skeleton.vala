@@ -7,7 +7,7 @@ using Dino.Entities;
 
 namespace Dino.Ui.ConversationSummary {
 
-public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface, Object {
+public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface, Dino.Ui.RelativeTimeTarget, Object {
 
     public Grid main_grid { get; set; }
     public Label name_label { get; set; }
@@ -34,7 +34,6 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
     public Widget? widget = null;
     private ReactionsController? reactions_controller = null;
 
-    private uint time_update_timeout = 0;
     private ulong updated_roster_handler_id = 0;
 
     public ConversationItemSkeleton(StreamInteractor stream_interactor, Conversation conversation, Plugins.MetaConversationItem item) {
@@ -99,6 +98,7 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
 
         if (item.time != null) {
             update_time();
+            Dino.Ui.RelativeTimeUpdater.register(this);
         }
 
         update_received_mark();
@@ -179,19 +179,16 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
         set_widget(widget, Plugins.WidgetType.GTK4, 3);
     }
 
-    private void on_time_update_timeout() {
-        time_update_timeout = 0;
-        if (main_grid.parent != null) update_time();
+    private void update_time() {
+        time_label.label = get_relative_time(item.time.to_local()).to_string();
     }
 
-    private void update_time() {
-        if (time_update_timeout != 0) {
-            Source.remove(time_update_timeout);
-            time_update_timeout = 0;
-        }
-        time_label.label = get_relative_time(item.time.to_local()).to_string();
+    public int seconds_until_update() {
+        return Dino.Ui.RelativeTimeUpdater.get_next_time_change(item.time);
+    }
 
-        time_update_timeout = Dino.WeakTimeout.add_seconds_once((int) get_next_time_change(item.time), this, on_time_update_timeout);
+    public void update_relative_time() {
+        if (main_grid.parent != null) update_time();
     }
 
     private void update_name_label() {
@@ -217,21 +214,6 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
                 time_label.tooltip_text = error_text;
                 break;
             default: received_image.icon_name = null; break;
-        }
-    }
-
-    public static int get_next_time_change(DateTime datetime) {
-        DateTime now = new DateTime.now_local();
-        TimeSpan timespan = now.difference(datetime);
-
-        if (timespan < 10 * TimeSpan.MINUTE) {
-            if (now.get_second() < datetime.get_second()) {
-                return datetime.get_second() - now.get_second();
-            } else {
-                return 60 - (now.get_second() - datetime.get_second());
-            }
-        } else {
-            return (23 - now.get_hour()) * 3600 + (59 - now.get_minute()) * 60 + (59 - now.get_second());
         }
     }
 
@@ -277,10 +259,7 @@ public class ConversationItemSkeleton : Plugins.ConversationItemWidgetInterface,
     }
 
     public override void dispose() {
-        if (time_update_timeout != 0) {
-            Source.remove(time_update_timeout);
-            time_update_timeout = 0;
-        }
+        Dino.Ui.RelativeTimeUpdater.unregister(this);
         if (updated_roster_handler_id != 0){
             stream_interactor.get_module(RosterManager.IDENTITY).disconnect(updated_roster_handler_id);
             updated_roster_handler_id = 0;
