@@ -45,11 +45,24 @@ namespace Dino {
         private const string MIME_TYPE = "image/png";
 
         public async void fill_metadata(File file, Xep.FileMetadataElement.FileMetadata metadata) {
-            var preview = yield ImagePreview.load(file, int.MAX, int.MAX);
+            int width, height;
+            Gdk.PixbufFormat? format = Gdk.Pixbuf.get_file_info(file.get_path(), out width, out height);
+            var preview = yield ImagePreview.load(file, 8, 8);
             Pixbuf pixbuf = preview.pixbuf;
-            metadata.width = pixbuf.get_width();
-            metadata.height = pixbuf.get_height();
-            float ratio = (float)metadata.width / (float) metadata.height;
+            if (width > 0 && height > 0) {
+                // Account for EXIF orientation, which the preview applies before scaling.
+                if ((width > height) != (pixbuf.get_width() > pixbuf.get_height())) {
+                    int tmp = width;
+                    width = height;
+                    height = tmp;
+                }
+                metadata.width = width;
+                metadata.height = height;
+            } else {
+                metadata.width = pixbuf.get_width();
+                metadata.height = pixbuf.get_height();
+            }
+            float ratio = (float)pixbuf.get_width() / (float) pixbuf.get_height();
 
             int thumbnail_width = -1;
             int thumbnail_height = -1;
