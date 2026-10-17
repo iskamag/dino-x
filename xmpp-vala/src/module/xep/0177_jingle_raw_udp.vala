@@ -63,16 +63,26 @@ namespace Xmpp.Xep.JingleRawUdp {
 //            this.components = components;
             if (node != null) {
                 foreach (StanzaNode candidate_node in node.get_subnodes("candidate")) {
+                    string? component_str = candidate_node.get_attribute("component");
+                    string? generation_str = candidate_node.get_attribute("generation");
+                    string? id_str = candidate_node.get_attribute("id");
+                    string? ip_str = candidate_node.get_attribute("ip");
+                    string? port_str = candidate_node.get_attribute("port");
+                    int component = candidate_node.get_attribute_int("component", -1);
+                    int generation = candidate_node.get_attribute_int("generation", -1);
+                    int port = candidate_node.get_attribute_int("port", -1);
+                    InetAddress? ip = ip_str != null ? new InetAddress.from_string(ip_str) : null;
+                    if (id_str == null || ip == null || component < 0 || generation < 0 || port < 0 || port > 65535) {
+                        info("Ignoring invalid raw-udp candidate");
+                        continue;
+                    }
+
                     Candidate candidate = new Candidate();
-                    string component_str = candidate_node.get_attribute("component");
-                    candidate.component = int.parse(component_str);
-                    string generation_str = candidate_node.get_attribute("generation");
-                    candidate.generation = int.parse(generation_str);
-                    candidate.id = candidate_node.get_attribute("generation");
-                    string ip_str = candidate_node.get_attribute("ip");
-                    candidate.ip = new InetAddress.from_string(ip_str);
-                    string port_str = candidate_node.get_attribute("port");
-                    candidate.port = int.parse(port_str);
+                    candidate.component = component;
+                    candidate.generation = generation;
+                    candidate.id = id_str;
+                    candidate.ip = (!)ip;
+                    candidate.port = (uint) port;
 
                     remote_candidates.add(candidate);
                 }
@@ -87,6 +97,7 @@ namespace Xmpp.Xep.JingleRawUdp {
             StanzaNode transport_node = new StanzaNode.build("transport", NS_URI).add_self_xmlns();
             foreach (Candidate candidate in own_candidates) {
                 transport_node.put_node(new StanzaNode.build("candidate", NS_URI)
+                        .put_attribute("component", candidate.component.to_string())
                         .put_attribute("generation", candidate.generation.to_string())
                         .put_attribute("id", candidate.id)
                         .put_attribute("ip", candidate.ip.to_string())

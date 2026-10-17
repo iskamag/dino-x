@@ -35,7 +35,7 @@ public class Module : XmppStreamModule {
         StanzaNode? x_node = presence.stanza.get_subnode("x", "http://jabber.org/protocol/muc#user");
         if (x_node == null) return;
         foreach (StanzaNode status_node in x_node.get_subnodes("status", "http://jabber.org/protocol/muc#user")) {
-            if (int.parse(status_node.get_attribute("code")) == 110) {
+            if (status_node.get_attribute_int("code", -1) == 110) {
                 received_own_occupant_id(stream, presence.from, occupant_id);
             }
         }

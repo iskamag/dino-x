@@ -510,7 +510,8 @@ public class Module : XmppStreamModule {
     private static ArrayList<int> get_status_codes(StanzaNode x_node) {
         ArrayList<int> ret = new ArrayList<int>();
         foreach (StanzaNode status_node in x_node.get_subnodes("status", NS_URI_USER)) {
-            ret.add(int.parse(status_node.get_attribute("code")));
+            int code = status_node.get_attribute_int("code", -1);
+            if (code >= 0) ret.add(code);
         }
         return ret;
     }

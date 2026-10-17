@@ -23,11 +23,10 @@ public class Stanza : Xmpp.Stanza {
     public int priority {
         get {
             StanzaNode? priority_node = stanza.get_subnode(NODE_PRIORITY);
-            if (priority_node == null) {
-                return 0;
-            } else {
-                return int.parse(priority_node.get_string_content());
-            }
+            if (priority_node == null) return 0;
+            int priority = 0;
+            if (!int.try_parse(priority_node.get_string_content() ?? "", out priority, null, 10)) return 0;
+            return priority;
         }
         set {
             StanzaNode? priority_node = stanza.get_subnode(NODE_PRIORITY);

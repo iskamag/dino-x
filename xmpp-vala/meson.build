@@ -163,6 +163,7 @@ test_sources = [
     'tests/jid.vala',
     'tests/stanza.vala',
     'tests/stream_management.vala',
+    'tests/module_hardening.vala',
     'tests/color.vala',
     'tests/util.vala',
     'tests/weak_map.vala',

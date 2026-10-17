@@ -181,7 +181,9 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
             stream.add_flag(f);
         }
 
-        h_outbound = int.parse(resumed_node.get_attribute("h", NS_URI));
+        // A missing/invalid h is a protocol violation; assume nothing was acked and resend.
+        h_outbound = resumed_node.get_attribute_int("h", 0, NS_URI);
+        if (h_outbound < 0) h_outbound = 0;
         handle_incoming_h(stream, h_outbound);
         // Previously transmitted stanzas retain their wire order and must precede
         // new queued stanzas, regardless of their original I/O priorities.
@@ -202,7 +204,8 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
         session_id = null;
         string? h_acked = failed_node.get_attribute("h", NS_URI);
         if (h_acked != null) {
-            h_outbound = int.parse(h_acked);
+            h_outbound = failed_node.get_attribute_int("h", 0, NS_URI);
+            if (h_outbound < 0) h_outbound = 0;
             handle_incoming_h(stream, h_outbound);
         }
         foreach (var id in in_flight_stanzas.keys) {
@@ -230,9 +233,12 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     }
 
     private void handle_ack(XmppStream stream, StanzaNode node) {
-        string? h_acked = node.get_attribute("h", NS_URI);
-        int parsed_int = int.parse(h_acked);
-        handle_incoming_h(stream, parsed_int);
+        int h_acked = node.get_attribute_int("h", -1, NS_URI);
+        if (h_acked < 0) {
+            info("Ignoring stream management ack without a valid h attribute");
+            return;
+        }
+        handle_incoming_h(stream, h_acked);
         check_queue(stream);
     }
 
