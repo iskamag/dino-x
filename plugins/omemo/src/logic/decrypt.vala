@@ -101,17 +101,55 @@ namespace Dino.Plugins.Omemo {
                         }
                     }
                 } else {
-                    // If we don't know the device name (MUC history w/o MAM), test decryption with all keys with fitting device id
-                    foreach (Row row in db.identity_meta.get_with_device_id(identity_id, data.sid)) {
-                        try {
-                            possible_jids.add(Jid.from_string(row[db.identity_meta.address_name]));
-                        } catch (InvalidJidError e) {
-                            warning("Ignoring invalid jid from database: %s", e.message);
-                        }
+                    // If we don't know the device name (MUC history w/o MAM), test decryption with keys with a fitting device id.
+                    // Prefer known room members and bound the number of attempts.
+                    var members = get_known_room_members(message);
+                    possible_jids = get_device_candidates(identity_id, data.sid, members);
+                    if (possible_jids.is_empty && !members.is_empty) {
+                        possible_jids = get_device_candidates(identity_id, data.sid, new HashSet<Jid>(Jid.hash_bare_func, Jid.equals_bare_func));
                     }
                 }
             }
             return possible_jids;
+        }
+
+        private const int MAX_CANDIDATE_JIDS = 64;
+
+        private HashSet<Jid> get_known_room_members(Entities.Message message) {
+            var ret = new HashSet<Jid>(Jid.hash_bare_func, Jid.equals_bare_func);
+            Dino.MucManager? muc_manager = stream_interactor.get_module(Dino.MucManager.IDENTITY);
+            if (muc_manager == null) return ret;
+
+            Gee.List<Jid>? occupants = muc_manager.get_occupants(message.counterpart, message.account);
+            if (occupants != null) {
+                foreach (Jid occupant in occupants) {
+                    Jid? real_jid = muc_manager.get_real_jid(occupant, message.account);
+                    if (real_jid != null) ret.add(real_jid.bare_jid);
+                }
+            }
+            Gee.List<Jid>? offline_members = muc_manager.get_offline_members(message.counterpart, message.account);
+            if (offline_members != null) {
+                foreach (Jid member in offline_members) ret.add(member.bare_jid);
+            }
+            return ret;
+        }
+
+        private Gee.List<Jid> get_device_candidates(int identity_id, int device_id, HashSet<Jid> members) {
+            var ret = new ArrayList<Jid>();
+            foreach (Row row in db.identity_meta.get_with_device_id(identity_id, device_id).order_by(db.identity_meta.last_active, "DESC")) {
+                try {
+                    Jid jid = Jid.from_string(row[db.identity_meta.address_name]);
+                    if (!members.is_empty && !members.contains(jid.bare_jid)) continue;
+                    ret.add(jid);
+                    if (ret.size >= MAX_CANDIDATE_JIDS) {
+                        warning("Limiting OMEMO sender candidates to %d for device %d", MAX_CANDIDATE_JIDS, device_id);
+                        break;
+                    }
+                } catch (InvalidJidError e) {
+                    warning("Ignoring invalid jid from database: %s", e.message);
+                }
+            }
+            return ret;
         }
 
         public override uint8[] decrypt_key(Xmpp.Xep.Omemo.ParsedData data, Jid from_jid) throws GLib.Error {

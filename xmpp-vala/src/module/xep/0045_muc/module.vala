@@ -419,7 +419,7 @@ public class Module : XmppStreamModule {
         foreach (StatusCode code in USER_REMOVED_CODES) {
             if (code in status_codes) {
                 if (StatusCode.SELF_PRESENCE in status_codes) {
-                    flag.left_muc(stream, presence.from.bare_jid);
+                    flag.left_muc(presence.from.bare_jid);
                     self_removed_from_room(stream, presence.from, code);
                     Presence.Flag presence_flag = stream.get_flag(Presence.Flag.IDENTITY);
                     presence_flag.remove_presence(presence.from.bare_jid);

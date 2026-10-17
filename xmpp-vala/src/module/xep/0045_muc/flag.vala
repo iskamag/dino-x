@@ -117,16 +117,24 @@ public class Flag : XmppStreamFlag {
         enter_ids.unset(jid.bare_jid);
     }
 
-    internal void left_muc(XmppStream stream, Jid muc_jid) {
+    internal void left_muc(Jid muc_jid) {
         own_nicks.unset(muc_jid);
         subjects.unset(muc_jid);
         subjects_by.unset(muc_jid);
-        Gee.List<Jid>? occupants = stream.get_flag(Presence.Flag.IDENTITY).get_resources(muc_jid);
-        if (occupants != null) {
-            foreach (Jid occupant in occupants) {
-                remove_occupant_info(occupant);
-            }
+
+        // Drop all occupant and affiliation state for the room, including
+        // entries that outlived the presence resource they were learned from.
+        var occupants = new ArrayList<Jid>();
+        foreach (Jid occupant in occupant_real_jids.keys) {
+            if (occupant.bare_jid.equals_bare(muc_jid)) occupants.add(occupant);
         }
+        foreach (Jid occupant in occupant_role.keys) {
+            if (occupant.bare_jid.equals_bare(muc_jid)) occupants.add(occupant);
+        }
+        foreach (Jid occupant in occupants) {
+            remove_occupant_info(occupant);
+        }
+        affiliations.unset(muc_jid.bare_jid);
     }
 
     internal void remove_occupant_info(Jid jid) {
