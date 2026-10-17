@@ -151,6 +151,9 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
             Flag.get_add_flag(stream);
 
             h_outbound = 0;
+        } else if (!stream_has_sm_feature(stream)) {
+            // No stream management on this stream: stanzas may be flushed once bound.
+            check_queue(stream);
         }
     }
 
@@ -212,7 +215,6 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
             in_flight_stanzas[id].promise.set_exception(new IOError.FAILED("Stanza not acked and session not resumed"));
         }
         in_flight_stanzas.clear();
-        check_queue(stream);
         stream.received_features_node(stream);
 
         stream.get_flag(Flag.IDENTITY).finished = true;
@@ -225,6 +227,7 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
         ((IoXmppStream)stream).write_obj = this;
 
         stream.get_flag(Flag.IDENTITY).finished = true;
+        check_queue(stream);
     }
 
     private void send_ack(XmppStream stream) {

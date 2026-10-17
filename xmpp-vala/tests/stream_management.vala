@@ -9,6 +9,7 @@ class StreamManagementTest : Gee.TestCase {
         add_test("resume_survives_connection_cancellation", test_connection_cancellation);
         add_test("explicit_cancellation_is_respected", test_explicit_cancellation);
         add_test("resume_drains_queue_after_connection_cancellation", test_cancelled_connection_queue);
+        add_test("resume_failure_waits_for_bind", test_resume_failure_waits_for_bind);
     }
 
     private class CaptureLog : XmppLog {
@@ -138,6 +139,25 @@ class StreamManagementTest : Gee.TestCase {
             fail_if_not_eq_str(resumed.capture.message_ids[i], "m%d".printf(i + 1));
         }
         ack(resumed, 20);
+    }
+
+    private void test_resume_failure_waits_for_bind() {
+        var module = new Xep.StreamManagement.Module();
+        var original = enable(module);
+        for (int i = 1; i <= 11; i++) send(original, i);
+
+        module.detach(original);
+        var stream = new MemoryStream();
+        stream.add_module(module);
+        module.attach(stream);
+        stream.add_flag(new Xep.StreamManagement.Flag());
+
+        module.on_resume_failed(stream, new StanzaNode.build("failed", Xep.StreamManagement.NS_URI));
+        fail_if_not_eq_int(stream.capture.message_ids.size, 0);
+
+        module.on_enabled(stream, new StanzaNode.build("enabled", Xep.StreamManagement.NS_URI).put_attribute("id", "new-session"));
+        fail_if_not_eq_int(stream.capture.message_ids.size, 1);
+        fail_if_not_eq_str(stream.capture.message_ids[0], "m11");
     }
 
     private void test_explicit_cancellation() {
