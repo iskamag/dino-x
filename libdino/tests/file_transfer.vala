@@ -151,6 +151,12 @@ private async void check_truncated_download() throws Error {
     server.disconnect();
 }
 
+private void check_query_sql_args() {
+    var row = app.db.query_sql("SELECT ? AS value", new string[] { "hello" }).get_next();
+    assert_nonnull(row);
+    assert_cmpstr(row.get_text("value"), CompareOperator.EQ, "hello");
+}
+
 private void run_check(int check) {
     var loop = new MainLoop();
     run_check_async.begin(check, (obj, result) => {
@@ -186,5 +192,6 @@ int main(string[] args) {
     GLib.Test.add_func("/file-transfers/cancel-retry", () => run_check(2));
     GLib.Test.add_func("/file-transfers/cancel-metadata-retry", () => run_check(3));
     GLib.Test.add_func("/file-transfers/truncated-download", () => run_check(4));
+    GLib.Test.add_func("/file-transfers/query-sql-args", check_query_sql_args);
     return GLib.Test.run();
 }
