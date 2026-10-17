@@ -21,6 +21,7 @@ public class View : Box {
     private Conversation? conversation;
 
     private HashMap<File, Widget> file_widgets = new HashMap<File, Widget>();
+    private HashMap<File, Cancellable> preview_cancellables = new HashMap<File, Cancellable>();
 
     [GtkChild] public unowned Box quote_box;
     [GtkChild] public unowned Box file_box;
@@ -72,9 +73,13 @@ public class View : Box {
         bool is_image = Dino.Util.is_pixbuf_supported_content_type(content_type);
 
         Widget? widget = null;
+        FixedRatioPicture? picture = null;
+        Cancellable? preview_cancellable = null;
         if (is_image) {
-            var picture = new FixedRatioPicture() {
-                file = file,
+            // Do not use Gtk.Picture.file here: GTK's file loader resolves some
+            // formats (GIF, WebP, ...) to a transparent placeholder. Decode
+            // with gdk-pixbuf like the conversation view does.
+            picture = new FixedRatioPicture() {
                 height_request = 64,
                 width_request = 64,
                 content_fit = ContentFit.COVER,
@@ -84,7 +89,7 @@ public class View : Box {
                 margin_bottom = 4
             };
             picture.add_css_class("image-round-corners");
-
+            preview_cancellable = new Cancellable();
             widget = picture;
         } else {
             FileInputWidget file_widget = new FileInputWidget() { margin_top = 8, margin_end = 8, margin_bottom = 4 };
@@ -109,6 +114,23 @@ public class View : Box {
         file_box.append(overlay);
 
         file_widgets[file] = overlay;
+        if (picture != null && preview_cancellable != null) {
+            preview_cancellables[file] = (!)preview_cancellable;
+            load_image_preview.begin(file, (!)picture, (!)preview_cancellable);
+        }
+    }
+
+    private async void load_image_preview(File file, FixedRatioPicture picture, Cancellable cancellable) {
+        try {
+            int scale = int.max(1, picture.get_scale_factor());
+            var preview = yield ImagePreview.load(file, 64 * scale, 64 * scale, cancellable);
+            if (cancellable.is_cancelled() || preview.pixbuf == null) return;
+            picture.paintable = Gdk.Texture.for_pixbuf(preview.pixbuf);
+        } catch (Error e) {
+            if (!(e is IOError.CANCELLED)) {
+                warning("Could not load image preview for %s: %s", file.get_path() ?? file.get_uri(), e.message);
+            }
+        }
     }
 
     public void remove_file(File file) {
@@ -117,6 +139,12 @@ public class View : Box {
         if (file_widget == null) {
             warning("Trying to remove file that doesn't have a widget");
             return;
+        }
+
+        Cancellable? cancellable = preview_cancellables[file];
+        if (cancellable != null) {
+            cancellable.cancel();
+            preview_cancellables.unset(file);
         }
 
         file_box.remove(file_widget);
@@ -267,6 +295,11 @@ public class View : Box {
     }
 
     public void clear_files() {
+        foreach (var cancellable in preview_cancellables.values) {
+            cancellable.cancel();
+        }
+        preview_cancellables.clear();
+
         Widget? file_child = file_box.get_first_child();
         while (file_child != null) {
             file_box.remove(file_child);

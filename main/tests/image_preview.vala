@@ -5,6 +5,14 @@ namespace Dino.Ui.Test {
 private string fixture_dir;
 private bool have_display;
 
+private Dino.Ui.Application? test_app = null;
+
+// GTK's g_set_application_name() must only run once per process.
+private Dino.Ui.Application get_test_app() {
+    if (test_app == null) test_app = new Dino.Ui.Application();
+    return test_app;
+}
+
 private ImagePreview preview(string name, int max_width = 600, int max_height = 300) throws Error {
     var stream = File.new_for_path(Path.build_filename(fixture_dir, name)).read();
     try {
@@ -268,7 +276,7 @@ private class ImageRow : Dino.Plugins.MetaConversationItem {
 private void test_conversation_switch() {
     if (!have_display) { GLib.Test.skip("No display available"); return; }
     try {
-        var app = new Dino.Ui.Application();
+        var app = get_test_app();
         var view = new Dino.Ui.ConversationSummary.ConversationView().init(app.stream_interactor);
         var account = new Dino.Entities.Account(Xmpp.Jid.from_string("preview@example.com"), "");
         var first = new Dino.Entities.Conversation(Xmpp.Jid.from_string("first@example.com"), account, Dino.Entities.Conversation.Type.GROUPCHAT);
@@ -292,6 +300,57 @@ private void test_conversation_switch() {
         assert_null(stack.visible_child);
         while (MainContext.default().pending()) MainContext.default().iteration(false);
     } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
+}
+
+
+private FixedRatioPicture? find_fixed_picture(Gtk.Widget widget) {
+    if (widget is FixedRatioPicture) return (FixedRatioPicture) widget;
+    for (Gtk.Widget? child = widget.get_first_child(); child != null; child = child.get_next_sibling()) {
+        var found = find_fixed_picture(child);
+        if (found != null) return found;
+    }
+    return null;
+}
+
+private void test_presend_attachment_preview() {
+    if (!have_display) { GLib.Test.skip("No display available"); return; }
+    var app = get_test_app();
+    // A GIF/WebP used to be loaded through Gtk.Picture.file, which resolves to
+    // a transparent GtkSvg placeholder on GTK 4.24. The attachment preview is
+    // now decoded with ImagePreview, so every format must yield a texture.
+    string[] names = { "static.png", "static.gif", "static.webp", "animated.gif", "animated.webp", "interlaced.gif", "orientation-6.jpg" };
+    foreach (var name in names) {
+        var view = new Dino.Ui.ChatInput.View().init(app.stream_interactor);
+        view.add_file(File.new_for_path(Path.build_filename(fixture_dir, name)));
+
+        var loop = new MainLoop();
+        uint elapsed = 0;
+        Timeout.add(20, () => {
+            var current = find_fixed_picture(view);
+            if (current != null && current.paintable != null) {
+                loop.quit();
+                return false;
+            }
+            elapsed += 20;
+            if (elapsed >= 3000) {
+                loop.quit();
+                return false;
+            }
+            return true;
+        });
+        loop.run();
+
+        var picture = find_fixed_picture(view);
+        assert_nonnull(picture);
+        FixedRatioPicture pic = (!)picture;
+        assert_null(pic.file);
+        assert_nonnull(pic.paintable);
+        Gdk.Paintable paintable = (!)pic.paintable;
+        assert_true(paintable is Gdk.Texture);
+        assert_true(paintable.get_intrinsic_width() > 0);
+        assert_true(paintable.get_intrinsic_height() > 0);
+        assert_false(paintable.get_type().name().contains("Svg"));
+    }
 }
 
 int main(string[] args) {
@@ -318,6 +377,7 @@ int main(string[] args) {
     GLib.Test.add_func("/preview/replacement", test_preview_replacement);
     GLib.Test.add_func("/preview/conversation-switch", test_conversation_switch);
     GLib.Test.add_func("/preview/grouped-images", test_grouped_images);
+    GLib.Test.add_func("/preview/presend-attachment", test_presend_attachment_preview);
     add_regression_tests();
     add_message_state_regression_tests();
     add_call_state_regression_tests();

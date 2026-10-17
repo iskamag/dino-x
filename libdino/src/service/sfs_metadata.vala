@@ -45,9 +45,16 @@ namespace Dino {
         private const string MIME_TYPE = "image/png";
 
         public async void fill_metadata(File file, Xep.FileMetadataElement.FileMetadata metadata) {
-            int width, height;
-            Gdk.PixbufFormat? format = Gdk.Pixbuf.get_file_info(file.get_path(), out width, out height);
+            int width = 0, height = 0;
+            string? path = file.get_path();
+            if (path != null) {
+                Gdk.Pixbuf.get_file_info((!)path, out width, out height);
+            }
             var preview = yield ImagePreview.load(file, 8, 8);
+            if (preview.pixbuf == null) {
+                warning("Could not decode image %s for outgoing metadata", path ?? file.get_uri());
+                return;
+            }
             Pixbuf pixbuf = preview.pixbuf;
             if (width > 0 && height > 0) {
                 // Account for EXIF orientation, which the preview applies before scaling.
@@ -79,7 +86,8 @@ namespace Dino {
                 }
             }
 
-            Pixbuf thumbnail_pixbuf = pixbuf.scale_simple(thumbnail_width, thumbnail_height, InterpType.BILINEAR);
+            Pixbuf? thumbnail_pixbuf = pixbuf.scale_simple(thumbnail_width, thumbnail_height, InterpType.BILINEAR);
+            if (thumbnail_pixbuf == null) return;
             uint8[] buffer;
             thumbnail_pixbuf.save_to_buffer(out buffer, IMAGE_TYPE);
             var thumbnail = new Xep.JingleContentThumbnails.Thumbnail();

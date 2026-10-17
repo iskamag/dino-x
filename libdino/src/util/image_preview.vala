@@ -55,15 +55,17 @@ public class ImagePreview : Object {
         }
         var pixbuf = decode_still(stream, max_width, max_height, cancellable);
         var oriented = pixbuf.apply_embedded_orientation() ?? pixbuf;
-        // The pre-decode orientation scan only looks at the file prefix; enforce
-        // the requested box again after the authoritative EXIF rotation.
-        if (oriented.get_width() > max_width || oriented.get_height() > max_height) {
-            double scale = double.min((double) max_width / oriented.get_width(), (double) max_height / oriented.get_height());
-            Pixbuf? scaled = oriented.scale_simple(int.max(1, (int) (oriented.get_width() * scale)),
-                    int.max(1, (int) (oriented.get_height() * scale)), InterpType.BILINEAR);
-            if (scaled != null) oriented = scaled;
-        }
-        return new ImagePreview(oriented);
+        return new ImagePreview(clamp(oriented, max_width, max_height));
+    }
+
+    // The pre-decode orientation scan only looks at the file prefix; enforce the
+    // requested box again after the authoritative EXIF rotation.
+    private static Pixbuf clamp(Pixbuf pixbuf, int max_width, int max_height) {
+        if (pixbuf.get_width() <= max_width && pixbuf.get_height() <= max_height) return pixbuf;
+        double scale = double.min((double) max_width / pixbuf.get_width(), (double) max_height / pixbuf.get_height());
+        Pixbuf? scaled = pixbuf.scale_simple(int.max(1, (int) (pixbuf.get_width() * scale)),
+                int.max(1, (int) (pixbuf.get_height() * scale)), InterpType.BILINEAR);
+        return scaled ?? pixbuf;
     }
 
     private static Pixbuf decode_still(InputStream input, int max_width, int max_height, Cancellable? cancellable = null) throws Error {
@@ -298,8 +300,15 @@ public class ImagePreview : Object {
                 int dest_x = (int) (x * scale), dest_y = (int) (y * scale);
                 int dest_width = int.min(pixbuf.width, target_width - dest_x);
                 int dest_height = int.min(pixbuf.height, target_height - dest_y);
-                if ((frame[15] & 2) != 0) pixbuf.copy_area(0, 0, dest_width, dest_height, canvas, dest_x, dest_y);
-                else pixbuf.composite(canvas, dest_x, dest_y, dest_width, dest_height, dest_x, dest_y, 1, 1, InterpType.NEAREST, 255);
+                if (dest_width > 0 && dest_height > 0) {
+                    if ((frame[15] & 2) != 0) {
+                        pixbuf.copy_area(0, 0, dest_width, dest_height, canvas, dest_x, dest_y);
+                    } else {
+                        // Source offsets are 0,0: dest_x/dest_y are positions on
+                        // the canvas, not offsets into the frame.
+                        pixbuf.composite(canvas, dest_x, dest_y, dest_width, dest_height, 0, 0, 1, 1, InterpType.NEAREST, 255);
+                    }
+                }
                 return new ImagePreview(canvas, "WEBP");
             }
             if (matches(chunk, 0, "ANIM")) {
@@ -320,7 +329,9 @@ public class ImagePreview : Object {
         if (remaining != 0) throw new IOError.INVALID_DATA("Truncated WebP chunk header");
         put_little_endian(encoded.data, 4, encoded.len - 8, 4);
         var bytes = ByteArray.free_to_bytes((owned) encoded);
-        return new ImagePreview(decode_still(new MemoryInputStream.from_bytes(bytes), max_width, max_height, cancellable).apply_embedded_orientation());
+        var decoded = decode_still(new MemoryInputStream.from_bytes(bytes), max_width, max_height, cancellable);
+        var oriented = decoded.apply_embedded_orientation() ?? decoded;
+        return new ImagePreview(clamp(oriented, max_width, max_height));
     }
 }
 

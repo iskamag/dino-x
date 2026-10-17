@@ -70,8 +70,7 @@ public class PreviewFileChooserNative : Object {
 
         try {
             Gdk.Pixbuf pixbuf = new Gdk.Pixbuf.from_file_at_scale(filename, PREVIEW_SIZE, PREVIEW_SIZE, true);
-            pixbuf = pixbuf.apply_embedded_orientation();
-            return pixbuf;
+            return pixbuf.apply_embedded_orientation() ?? pixbuf;
         } catch (Error e) {
             return null;
         }
