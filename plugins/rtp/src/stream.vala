@@ -64,6 +64,9 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
     private Gst.Pad send_rtp_src_pad;
 
     private Crypto.Srtp.Session? crypto_session = new Crypto.Srtp.Session();
+    // Key setup runs on the DTLS/Jingle thread while encrypt/decrypt runs on
+    // the GStreamer streaming and ICE threads.
+    private Mutex crypto_mutex = new Mutex();
 
     public Stream(Plugin plugin, Xmpp.Xep.Jingle.Content content) {
         base(content);
@@ -294,9 +297,14 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
     }
 
     private void prepare_local_crypto() {
-        if (local_crypto != null && local_crypto.is_valid && !crypto_session.has_encrypt) {
-            crypto_session.set_encryption_key(local_crypto.crypto_suite, local_crypto.key, local_crypto.salt);
-            debug("Setting up encryption with key params %s", local_crypto.key_params);
+        crypto_mutex.lock();
+        try {
+            if (local_crypto != null && local_crypto.is_valid && !crypto_session.has_encrypt) {
+                crypto_session.set_encryption_key(local_crypto.crypto_suite, local_crypto.key, local_crypto.salt);
+                debug("Setting up encryption with key params %s", local_crypto.key_params);
+            }
+        } finally {
+            crypto_mutex.unlock();
         }
     }
 
@@ -420,26 +428,36 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
     }
 
     private void encrypt_and_send_rtp(owned uint8[] data, int length) {
-        if (crypto_session.has_encrypt) {
-            try {
-                length = crypto_session.encrypt_rtp_in_place(data, length);
-            } catch (GLib.Error e) {
-                warning("Could not encrypt RTP packet: %s", e.message);
-                return;
+        crypto_mutex.lock();
+        try {
+            if (crypto_session.has_encrypt) {
+                try {
+                    length = crypto_session.encrypt_rtp_in_place(data, length);
+                } catch (GLib.Error e) {
+                    warning("Could not encrypt RTP packet: %s", e.message);
+                    return;
+                }
             }
+        } finally {
+            crypto_mutex.unlock();
         }
         data.length = length;
         on_send_rtp_data(new Bytes.take(data));
     }
 
     private void encrypt_and_send_rtcp(owned uint8[] data, int length) {
-        if (crypto_session.has_encrypt) {
-            try {
-                length = crypto_session.encrypt_rtcp_in_place(data, length);
-            } catch (GLib.Error e) {
-                warning("Could not encrypt RTCP packet: %s", e.message);
-                return;
+        crypto_mutex.lock();
+        try {
+            if (crypto_session.has_encrypt) {
+                try {
+                    length = crypto_session.encrypt_rtcp_in_place(data, length);
+                } catch (GLib.Error e) {
+                    warning("Could not encrypt RTCP packet: %s", e.message);
+                    return;
+                }
             }
+        } finally {
+            crypto_mutex.unlock();
         }
         data.length = length;
         Bytes bytes = new Bytes.take(data);
@@ -582,9 +600,14 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
     }
 
     private void prepare_remote_crypto() {
-        if (remote_crypto != null && remote_crypto.is_valid && !crypto_session.has_decrypt) {
-            crypto_session.set_decryption_key(remote_crypto.crypto_suite, remote_crypto.key, remote_crypto.salt);
-            debug("Setting up decryption with key params %s", remote_crypto.key_params);
+        crypto_mutex.lock();
+        try {
+            if (remote_crypto != null && remote_crypto.is_valid && !crypto_session.has_decrypt) {
+                crypto_session.set_decryption_key(remote_crypto.crypto_suite, remote_crypto.key, remote_crypto.salt);
+                debug("Setting up decryption with key params %s", remote_crypto.key_params);
+            }
+        } finally {
+            crypto_mutex.unlock();
         }
     }
 
@@ -600,14 +623,19 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
             prepare_remote_crypto();
 
             Gst.Buffer buffer;
-            if (crypto_session.has_decrypt) {
+            crypto_mutex.lock();
+            bool has_decrypt = crypto_session.has_decrypt;
+            if (has_decrypt) {
                 try {
                     buffer = new Gst.Buffer.wrapped(crypto_session.decrypt_rtp(bytes.get_data()));
                 } catch (Error e) {
                     warning("%s (%d)", e.message, e.code);
+                    crypto_mutex.unlock();
                     return;
                 }
+                crypto_mutex.unlock();
             } else {
+                crypto_mutex.unlock();
 #if GST_1_16
                 buffer = new Gst.Buffer.wrapped_bytes(bytes);
 #else
@@ -656,14 +684,19 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
             prepare_remote_crypto();
 
             Gst.Buffer buffer;
-            if (crypto_session.has_decrypt) {
+            crypto_mutex.lock();
+            bool has_decrypt = crypto_session.has_decrypt;
+            if (has_decrypt) {
                 try {
                     buffer = new Gst.Buffer.wrapped(crypto_session.decrypt_rtcp(bytes.get_data()));
                 } catch (Error e) {
                     warning("%s (%d)", e.message, e.code);
+                    crypto_mutex.unlock();
                     return;
                 }
+                crypto_mutex.unlock();
             } else {
+                crypto_mutex.unlock();
 #if GST_1_16
                 buffer = new Gst.Buffer.wrapped_bytes(bytes);
 #else

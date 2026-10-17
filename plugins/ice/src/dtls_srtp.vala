@@ -13,7 +13,10 @@ public class Handler {
     public signal void send_data(uint8[] data);
 
     public bool ready { get {
-        return srtp_session.has_encrypt && srtp_session.has_decrypt;
+        crypto_mutex.lock();
+        bool ready = srtp_session.has_encrypt && srtp_session.has_decrypt;
+        crypto_mutex.unlock();
+        return ready;
     }}
 
     public Mode mode { get; set; default = Mode.CLIENT; }
@@ -31,6 +34,9 @@ public class Handler {
     private bool restart = false;
 
     private Crypto.Srtp.Session srtp_session = new Crypto.Srtp.Session();
+    // Handshake/key setup runs on the DTLS thread while packets are processed
+    // on the GStreamer streaming and ICE threads.
+    private Mutex crypto_mutex = new Mutex();
 
     public Handler.with_cert(CredentialsCapsule creds) {
         this.credentials = creds;
@@ -38,6 +44,16 @@ public class Handler {
     }
 
     public uint8[]? process_incoming_data(uint component_id, uint8[] data) throws Crypto.Error {
+        if (data.length == 0) return null;
+        crypto_mutex.lock();
+        try {
+            return process_incoming_data_locked(component_id, data);
+        } finally {
+            crypto_mutex.unlock();
+        }
+    }
+
+    private uint8[]? process_incoming_data_locked(uint component_id, uint8[] data) throws Crypto.Error {
         if (data[0] >= 128) {
             if (!srtp_session.has_decrypt) {
                 debug("Received data before SRTP session is ready, dropping.");
@@ -60,6 +76,15 @@ public class Handler {
     }
 
     public uint8[]? process_outgoing_data(uint component_id, uint8[] data) throws Crypto.Error {
+        crypto_mutex.lock();
+        try {
+            return process_outgoing_data_locked(component_id, data);
+        } finally {
+            crypto_mutex.unlock();
+        }
+    }
+
+    private uint8[]? process_outgoing_data_locked(uint component_id, uint8[] data) throws Crypto.Error {
         if (srtp_session.has_encrypt) {
             if (component_id == 1) {
                 if (data.length >= 2 && data[1] >= 192 && data[1] < 224) {
@@ -209,12 +234,17 @@ public class Handler {
         }
 
         debug("Finished DTLS connection. We're %s", mode.to_string());
-        if (mode == Mode.SERVER) {
-            srtp_session.set_encryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, server_key.extract(), server_salt.extract());
-            srtp_session.set_decryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, client_key.extract(), client_salt.extract());
-        } else {
-            srtp_session.set_encryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, client_key.extract(), client_salt.extract());
-            srtp_session.set_decryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, server_key.extract(), server_salt.extract());
+        crypto_mutex.lock();
+        try {
+            if (mode == Mode.SERVER) {
+                srtp_session.set_encryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, server_key.extract(), server_salt.extract());
+                srtp_session.set_decryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, client_key.extract(), client_salt.extract());
+            } else {
+                srtp_session.set_encryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, client_key.extract(), client_salt.extract());
+                srtp_session.set_decryption_key(Crypto.Srtp.AES_CM_128_HMAC_SHA1_80, server_key.extract(), server_salt.extract());
+            }
+        } finally {
+            crypto_mutex.unlock();
         }
         return new Xmpp.Xep.Jingle.ContentEncryption(Xmpp.Xep.JingleIceUdp.DTLS_NS_URI, "DTLS-SRTP", credentials.own_fingerprint, peer_fingerprint);
     }
