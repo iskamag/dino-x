@@ -21,13 +21,8 @@ public class StanzaWriter {
         var data2 = node2.to_xml().data;
 
         uint8[] concat = new uint8[data1.length + data2.length];
-        int i = 0;
-        foreach (var datum in data1) {
-            concat[i++] = datum;
-        }
-        foreach (var datum in data2) {
-            concat[i++] = datum;
-        }
+        Memory.copy(concat, data1, data1.length);
+        Memory.copy((uint8*) concat + data1.length, data2, data2.length);
 
         yield write_data(concat, io_priority, cancellable ?? connection_cancellable);
     }
