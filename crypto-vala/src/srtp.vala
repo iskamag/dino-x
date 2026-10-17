@@ -5,6 +5,10 @@ public const string AES_CM_128_HMAC_SHA1_80 = "AES_CM_128_HMAC_SHA1_80";
 public const string AES_CM_128_HMAC_SHA1_32 = "AES_CM_128_HMAC_SHA1_32";
 public const string F8_128_HMAC_SHA1_80 = "F8_128_HMAC_SHA1_80";
 
+public int max_trailer_bytes() {
+    return (int) MAX_TRAILER_LEN;
+}
+
 public class Session {
     public bool has_encrypt { get; private set; default = false; }
     public bool has_decrypt { get; private set; default = false; }
@@ -29,13 +33,18 @@ public class Session {
     public uint8[] encrypt_rtp(uint8[] data) throws Error {
         uint8[] buf = new uint8[data.length + MAX_TRAILER_LEN];
         Memory.copy(buf, data, data.length);
-        int buf_use = data.length;
+        buf.length = encrypt_rtp_in_place(buf, data.length);
+        return buf;
+    }
+
+    // The buffer must have MAX_TRAILER_LEN bytes of capacity after `length`.
+    public int encrypt_rtp_in_place(uint8[] buf, int length) throws Error {
+        int buf_use = length;
         ErrorStatus res = encrypt_context.protect(buf, ref buf_use);
         if (res != ErrorStatus.ok) {
             throw new Error.UNKNOWN(@"SRTP encrypt failed: $res");
         }
-        buf.length = buf_use;
-        return buf;
+        return buf_use;
     }
 
     public uint8[] decrypt_rtp(uint8[] data) throws Error {
@@ -59,13 +68,18 @@ public class Session {
     public uint8[] encrypt_rtcp(uint8[] data) throws Error {
         uint8[] buf = new uint8[data.length + MAX_TRAILER_LEN + 4];
         Memory.copy(buf, data, data.length);
-        int buf_use = data.length;
+        buf.length = encrypt_rtcp_in_place(buf, data.length);
+        return buf;
+    }
+
+    // The buffer must have MAX_TRAILER_LEN + 4 bytes of capacity after `length`.
+    public int encrypt_rtcp_in_place(uint8[] buf, int length) throws Error {
+        int buf_use = length;
         ErrorStatus res = encrypt_context.protect_rtcp(buf, ref buf_use);
         if (res != ErrorStatus.ok) {
             throw new Error.UNKNOWN(@"SRTCP encrypt failed: $res");
         }
-        buf.length = buf_use;
-        return buf;
+        return buf_use;
     }
 
     public uint8[] decrypt_rtcp(uint8[] data) throws Error {

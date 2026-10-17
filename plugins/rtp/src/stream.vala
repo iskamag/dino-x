@@ -245,7 +245,7 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
                 new_target_receive_bitrate = uint.max(16, new_target_receive_bitrate); // Never go below 16
                 if (new_target_receive_bitrate != target_receive_bitrate) {
                     target_receive_bitrate = new_target_receive_bitrate;
-                    uint8[] data = new uint8[] {
+                    uint8[] packet = new uint8[] {
                         143, 206, 0, 5,
                         0, 0, 0, 0,
                         0, 0, 0, 0,
@@ -253,6 +253,8 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
                         1, 0, 0, 0,
                         0, 0, 0, 0
                     };
+                    uint8[] data = new uint8[packet.length + Crypto.Srtp.max_trailer_bytes() + 4];
+                    Memory.copy(data, packet, packet.length);
                     data[4] = (uint8)((our_ssrc >> 24) & 0xff);
                     data[5] = (uint8)((our_ssrc >> 16) & 0xff);
                     data[6] = (uint8)((our_ssrc >> 8) & 0xff);
@@ -271,7 +273,7 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
                     data[21] = (uint8)((ssrc >> 16) & 0xff);
                     data[22] = (uint8)((ssrc >> 8) & 0xff);
                     data[23] = (uint8)(ssrc & 0xff);
-                    encrypt_and_send_rtcp(data);
+                    encrypt_and_send_rtcp((owned) data, packet.length);
                 }
             }
         }
@@ -401,33 +403,46 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
 
         prepare_local_crypto();
 
-        uint8[] data;
-        buffer.extract_dup(0, buffer.get_size(), out data);
-        if (sink == send_rtp) {
-            encrypt_and_send_rtp((owned) data);
-        } else if (sink == send_rtcp) {
-            encrypt_and_send_rtcp((owned) data);
+        bool rtp = sink == send_rtp;
+        // Leave room for the SRTP authentication tag so encryption can run in place.
+        int data_length = (int) buffer.get_size();
+        uint8[] data = new uint8[data_length + (rtp ? Crypto.Srtp.max_trailer_bytes() : Crypto.Srtp.max_trailer_bytes() + 4)];
+        Gst.MapInfo map_info;
+        if (!buffer.map(out map_info, Gst.MapFlags.READ)) return Gst.FlowReturn.ERROR;
+        Memory.copy(data, map_info.data, map_info.size);
+        buffer.unmap(map_info);
+        if (rtp) {
+            encrypt_and_send_rtp((owned) data, data_length);
+        } else {
+            encrypt_and_send_rtcp((owned) data, data_length);
         }
         return Gst.FlowReturn.OK;
     }
 
-    private void encrypt_and_send_rtp(owned uint8[] data) {
-        Bytes bytes;
+    private void encrypt_and_send_rtp(owned uint8[] data, int length) {
         if (crypto_session.has_encrypt) {
-            bytes = new Bytes.take(crypto_session.encrypt_rtp(data));
-        } else {
-            bytes = new Bytes.take(data);
+            try {
+                length = crypto_session.encrypt_rtp_in_place(data, length);
+            } catch (GLib.Error e) {
+                warning("Could not encrypt RTP packet: %s", e.message);
+                return;
+            }
         }
-        on_send_rtp_data(bytes);
+        data.length = length;
+        on_send_rtp_data(new Bytes.take(data));
     }
 
-    private void encrypt_and_send_rtcp(owned uint8[] data) {
-        Bytes bytes;
+    private void encrypt_and_send_rtcp(owned uint8[] data, int length) {
         if (crypto_session.has_encrypt) {
-            bytes = new Bytes.take(crypto_session.encrypt_rtcp(data));
-        } else {
-            bytes = new Bytes.take(data);
+            try {
+                length = crypto_session.encrypt_rtcp_in_place(data, length);
+            } catch (GLib.Error e) {
+                warning("Could not encrypt RTCP packet: %s", e.message);
+                return;
+            }
         }
+        data.length = length;
+        Bytes bytes = new Bytes.take(data);
         if (rtcp_mux) {
             on_send_rtp_data(bytes);
         } else {
