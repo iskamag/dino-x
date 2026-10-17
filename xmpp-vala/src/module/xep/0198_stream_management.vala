@@ -14,6 +14,8 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     public Gee.List<XmppStreamFlag> flags = null;
     private HashMap<int, QueueItem> in_flight_stanzas = new HashMap<int, QueueItem>();
     private uint64 queue_sequence = 0;
+    private bool enable_requested = false;
+    internal string? resume_session_id = null;
     private Gee.Queue<QueueItem> resend_queue = new LinkedList<QueueItem>();
     private Gee.Queue<QueueItem> node_queue = new PriorityQueue<QueueItem>((a, b) => {
         if (a.io_priority != b.io_priority) return a.io_priority < b.io_priority ? -1 : 1;
@@ -129,6 +131,7 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     }
 
     public override void attach(XmppStream stream) {
+        enable_requested = false;
         stream.get_module(Bind.Module.IDENTITY).bound_to_resource.connect(check_enable);
         stream.received_features_node.connect(check_resume);
 
@@ -167,6 +170,7 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
 
     private void check_resume(XmppStream stream) {
         if (stream_has_sm_feature(stream) && session_id != null && !Flag.get_add_flag(stream).finished) {
+            resume_session_id = session_id;
             StanzaNode node = new StanzaNode.build("resume", NS_URI).add_self_xmlns()
                 .put_attribute("h", h_inbound.to_string())
                 .put_attribute("previd", session_id);
@@ -177,19 +181,23 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     }
 
     private void check_enable(XmppStream stream) {
-        if (stream_has_sm_feature(stream) && session_id == null && !Flag.get_add_flag(stream).finished) {
-            StanzaNode node = new StanzaNode.build("enable", NS_URI).add_self_xmlns().put_attribute("resume", "true");
-            write_node.begin(stream, node);
-
-            Flag.get_add_flag(stream);
-
-            h_outbound = 0;
-        } else if (!stream_has_sm_feature(stream)) {
+        if (!stream_has_sm_feature(stream)) {
             // No stream management on this stream: stanzas left unacknowledged by
             // an earlier session can never be acknowledged now. Fail them and
             // flush the rest once the resource is bound.
             fail_in_flight("Stanza not acked and stream management is unavailable");
             check_queue(stream);
+            return;
+        }
+        if (session_id == null && !enable_requested) {
+            enable_requested = true;
+            StanzaNode node = new StanzaNode.build("enable", NS_URI).add_self_xmlns().put_attribute("resume", "true");
+            write_node.begin(stream, node);
+
+            // Negotiation stays active until the server confirms with <enabled/>.
+            Flag.get_add_flag(stream).finished = false;
+
+            h_outbound = 0;
         }
     }
 
@@ -215,6 +223,8 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
         var flag = stream.get_flag(Flag.IDENTITY);
         flag.resumed = true;
         flag.finished = true;
+        enable_requested = true;
+        resume_session_id = null;
 
         foreach (XmppStreamFlag f in flags) {
             stream.add_flag(f);
@@ -240,25 +250,48 @@ public class Module : XmppStreamNegotiationModule, WriteNodeFunc {
     }
 
     public void on_resume_failed(XmppStream stream, StanzaNode failed_node) {
-        session_id = null;
-        string? h_acked = failed_node.get_attribute("h", NS_URI);
-        if (h_acked != null) {
-            h_outbound = failed_node.get_attribute_int("h", 0, NS_URI);
-            if (h_outbound < 0) h_outbound = 0;
-            handle_incoming_h(stream, h_outbound);
+        // A SASL2 success can contain both <failed/> and <bound><enabled/></bound>
+        // when the inline <enable/> succeeded. Keep the fresh session in that case.
+        bool fresh_session = session_id != null && resume_session_id != null && session_id != resume_session_id;
+        if (!fresh_session) {
+            session_id = null;
+            enable_requested = false;
         }
-        foreach (var id in in_flight_stanzas.keys) {
-            in_flight_stanzas[id].promise.set_exception(new IOError.FAILED("Stanza not acked and session not resumed"));
-        }
-        in_flight_stanzas.clear();
-        stream.received_features_node(stream);
+        resume_session_id = null;
 
+        if (!fresh_session) {
+            string? h_acked = failed_node.get_attribute("h", NS_URI);
+            if (h_acked != null) {
+                h_outbound = failed_node.get_attribute_int("h", 0, NS_URI);
+                if (h_outbound < 0) h_outbound = 0;
+                handle_incoming_h(stream, h_outbound);
+            }
+            fail_in_flight("Stanza not acked and session not resumed");
+        }
+        if (fresh_session) return;
+
+        Bind.Flag? bind_flag = stream.get_flag(Bind.Flag.IDENTITY);
+        bool bound = bind_flag != null && ((!)bind_flag).finished;
+        // Allow bind negotiation to proceed on streams that are not bound yet.
         stream.get_flag(Flag.IDENTITY).finished = true;
+        if (bound) {
+            // On SASL2 the resource is already bound when resumption fails, so
+            // no further bind callback will trigger <enable/>.
+            check_enable(stream);
+        } else {
+            stream.received_features_node(stream);
+        }
     }
 
     public void on_enabled(XmppStream stream, StanzaNode enabled_node) {
+        if (resume_session_id != null) {
+            // This is the fresh session that replaced a failed resumption; the
+            // previous session's unacked stanzas cannot be recovered.
+            fail_in_flight("Stanza not acked and session not resumed");
+        }
         h_inbound = 0;
         session_id = enabled_node.get_attribute("id", NS_URI);
+        enable_requested = true;
         flags = stream.flags;
         ((IoXmppStream)stream).write_obj = this;
 
@@ -337,6 +370,7 @@ public class Flag : XmppStreamFlag {
                 Flag.get_add_flag(stream);
 
                 var sm_module = stream.get_module(Module.IDENTITY);
+                sm_module.resume_session_id = sm_module.session_id;
 
                 StanzaNode resume_node = new StanzaNode.build("resume", NS_URI).add_self_xmlns()
                         .put_attribute("h", sm_module.h_inbound.to_string())

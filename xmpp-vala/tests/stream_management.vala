@@ -10,14 +10,19 @@ class StreamManagementTest : Gee.TestCase {
         add_test("explicit_cancellation_is_respected", test_explicit_cancellation);
         add_test("resume_drains_queue_after_connection_cancellation", test_cancelled_connection_queue);
         add_test("resume_failure_waits_for_bind", test_resume_failure_waits_for_bind);
+        add_test("sasl2_resume_failure_enables_after_bind", test_sasl2_resume_failure);
+        add_test("sasl2_resume_failure_enables_when_bind_follows", test_sasl2_resume_failure_bind_later);
+        add_test("sasl2_resume_failure_keeps_inline_session", test_sasl2_resume_failure_inline_enable);
         add_test("non_resumable_connection_drains_queue", test_non_resumable_connection_drains_queue);
     }
 
     private class CaptureLog : XmppLog {
         public Gee.List<string> message_ids = new Gee.ArrayList<string>();
+        public int enable_nodes = 0;
 
         public override bool should_log_node(StanzaNode node) {
             if (node.name == "message") message_ids.add(node.get_attribute("id"));
+            if (node.name == "enable" && node.ns_uri == Xep.StreamManagement.NS_URI) enable_nodes++;
             return false;
         }
     }
@@ -59,15 +64,13 @@ class StreamManagementTest : Gee.TestCase {
         return stream;
     }
 
-    private void send(MemoryStream stream, int number, int priority = Priority.DEFAULT, Cancellable? cancellable = null) {
+    private void send(MemoryStream stream, int number, int priority = Priority.DEFAULT, Cancellable? cancellable = null, bool expect_failure = false) {
         var stanza = new StanzaNode.build("message", JABBER_URI).put_attribute("id", "m%d".printf(number));
         stream.write_async.begin(stanza, priority, cancellable, (obj, result) => {
             try { stream.write_async.end(result); }
             catch (IOError.CANCELLED e) {}
             catch (Error e) {
-                // Sessions abandoned by the resume-failure tests leave their
-                // in-flight stanzas failed asynchronously.
-                if (!e.message.contains("not acked and") && !e.message.contains("stream management is unavailable")) fail_if_reached(e.message);
+                if (!expect_failure) fail_if_reached(e.message);
             }
         });
     }
@@ -149,7 +152,7 @@ class StreamManagementTest : Gee.TestCase {
     private void test_resume_failure_waits_for_bind() {
         var module = new Xep.StreamManagement.Module();
         var original = enable(module);
-        for (int i = 1; i <= 11; i++) send(original, i);
+        for (int i = 1; i <= 11; i++) send(original, i, Priority.DEFAULT, null, true);
 
         module.detach(original);
         var stream = new MemoryStream();
@@ -165,10 +168,94 @@ class StreamManagementTest : Gee.TestCase {
         if (stream.capture.message_ids.size > 0) fail_if_not_eq_str(stream.capture.message_ids[0], "m11");
     }
 
+    private MemoryStream prepare_sasl2_resume(Xep.StreamManagement.Module module, bool bind_first) {
+        var stream = new MemoryStream();
+        stream.add_module(module);
+        module.attach(stream);
+        stream.add_flag(new Xep.StreamManagement.Flag());
+        stream.features.put_node(new StanzaNode.build("sm", Xep.StreamManagement.NS_URI));
+        var bind2_activation = new Xep.Bind2.Sasl2Activation();
+        bind2_activation.inline_activation_providers[Xep.StreamManagement.NS_URI] = new Xep.StreamManagement.Bind2Activation();
+        var sasl2_activation = new Xep.StreamManagement.Sasl2Activation();
+        var success = new StanzaNode.build("success", Xep.ExtensibleSaslProfile.NS_URI)
+            .put_node(new StanzaNode.build("failed", Xep.StreamManagement.NS_URI));
+        var my_jid = Jid.from_string("me@example.org/device");
+
+        if (bind_first) {
+            bind2_activation.on_bound(stream, my_jid, success);
+            sasl2_activation.on_bound(stream, my_jid, success);
+        } else {
+            sasl2_activation.on_bound(stream, my_jid, success);
+            bind2_activation.on_bound(stream, my_jid, success);
+        }
+        return stream;
+    }
+
+    private void test_sasl2_resume_failure() {
+        var module = new Xep.StreamManagement.Module();
+        var original = enable(module);
+        for (int i = 1; i <= 11; i++) send(original, i, Priority.DEFAULT, null, true);
+        module.detach(original);
+
+        var stream = prepare_sasl2_resume(module, true);
+        fail_if_not_eq_int(stream.capture.enable_nodes, 1);
+        fail_if_not_eq_int(stream.capture.message_ids.size, 0);
+
+        module.on_enabled(stream, new StanzaNode.build("enabled", Xep.StreamManagement.NS_URI).put_attribute("id", "new-session"));
+        fail_if_not_eq_int(stream.capture.message_ids.size, 1);
+        if (stream.capture.message_ids.size > 0) fail_if_not_eq_str(stream.capture.message_ids[0], "m11");
+    }
+
+    private void test_sasl2_resume_failure_bind_later() {
+        var module = new Xep.StreamManagement.Module();
+        var original = enable(module);
+        for (int i = 1; i <= 11; i++) send(original, i, Priority.DEFAULT, null, true);
+        module.detach(original);
+
+        var stream = prepare_sasl2_resume(module, false);
+        fail_if_not_eq_int(stream.capture.enable_nodes, 1);
+        fail_if_not_eq_int(stream.capture.message_ids.size, 0);
+    }
+
+    private void test_sasl2_resume_failure_inline_enable() {
+        var module = new Xep.StreamManagement.Module();
+        var original = enable(module);
+        for (int i = 1; i <= 11; i++) send(original, i, Priority.DEFAULT, null, true);
+        module.detach(original);
+
+        var stream = new MemoryStream();
+        stream.add_module(module);
+        module.attach(stream);
+        stream.add_flag(new Xep.StreamManagement.Flag());
+        stream.features.put_node(new StanzaNode.build("sm", Xep.StreamManagement.NS_URI));
+
+        var bind2_activation = new Xep.Bind2.Sasl2Activation();
+        bind2_activation.inline_activation_providers[Xep.StreamManagement.NS_URI] = new Xep.StreamManagement.Bind2Activation();
+        var sasl2_activation = new Xep.StreamManagement.Sasl2Activation();
+        var my_jid = Jid.from_string("me@example.org/device");
+        // Record the session id that the resume request refers to.
+        sasl2_activation.get_activation_node(stream, new StanzaNode.build("inline", Xep.ExtensibleSaslProfile.NS_URI));
+
+        var success = new StanzaNode.build("success", Xep.ExtensibleSaslProfile.NS_URI)
+            .put_node(new StanzaNode.build("failed", Xep.StreamManagement.NS_URI))
+            .put_node(new StanzaNode.build("bound", Xep.Bind2.NS_URI)
+                .put_node(new StanzaNode.build("enabled", Xep.StreamManagement.NS_URI).put_attribute("id", "fresh")));
+
+        // The bound/enabled callback may run before the resume failure is
+        // processed; it must not clear the fresh session or fail its stanzas.
+        bind2_activation.on_bound(stream, my_jid, success);
+        sasl2_activation.on_bound(stream, my_jid, success);
+
+        fail_if_not_eq_str(module.session_id, "fresh");
+        fail_if_not_eq_int(stream.capture.enable_nodes, 0);
+        fail_if_not_eq_int(stream.capture.message_ids.size, 1);
+        if (stream.capture.message_ids.size > 0) fail_if_not_eq_str(stream.capture.message_ids[0], "m11");
+    }
+
     private void test_non_resumable_connection_drains_queue() {
         var module = new Xep.StreamManagement.Module();
         var original = enable(module);
-        for (int i = 1; i <= 20; i++) send(original, i);
+        for (int i = 1; i <= 20; i++) send(original, i, Priority.DEFAULT, null, true);
 
         module.detach(original);
         var stream = new MemoryStream();

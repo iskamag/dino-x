@@ -33,7 +33,6 @@ namespace Xmpp.Xep.Bind2 {
             bind_flag.my_jid = authorization_identifier;
             bind_flag.finished = true;
             stream.add_flag(bind_flag);
-            stream.get_module(Bind.Module.IDENTITY).bound_to_resource(stream, bind_flag.my_jid);
 
             StanzaNode? bound_node = success_node.get_subnode("bound", NS_URI);
             if (bound_node != null) {
@@ -41,6 +40,10 @@ namespace Xmpp.Xep.Bind2 {
                     inline_activation.on_bound(stream, bound_node);
                 }
             }
+
+            // Inline activations (for example stream management) must be applied
+            // before listeners see the stream as bound.
+            stream.get_module(Bind.Module.IDENTITY).bound_to_resource(stream, bind_flag.my_jid);
         }
     }
 
