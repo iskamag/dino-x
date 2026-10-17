@@ -203,10 +203,22 @@ public class Message : Object {
     }
 
     private void fetch_body_meta() {
+        var rows = new ArrayList<Qlite.Row>();
+        foreach (Qlite.Row row in db.body_meta.select().with(db.body_meta.message_id, "=", id)) {
+            rows.add(row);
+        }
+        set_body_meta_rows(rows);
+    }
+
+    public bool body_meta_loaded {
+        get { return fallbacks != null && markups != null; }
+    }
+
+    public void set_body_meta_rows(Gee.Collection<Qlite.Row> rows) {
         var fallbacks_by_ns = new HashMap<string, ArrayList<Xep.FallbackIndication.FallbackLocation>>();
         var markups = new ArrayList<Xep.MessageMarkup.Span>();
 
-        foreach (Qlite.Row row in db.body_meta.select().with(db.body_meta.message_id, "=", id)) {
+        foreach (Qlite.Row row in rows) {
             switch (row[db.body_meta.info_type]) {
                 case Xep.FallbackIndication.NS_URI:
                     string ns_uri = row[db.body_meta.info];

@@ -51,9 +51,35 @@ namespace Dino {
             return create_file_from_row_opt(row_option, conversation);
         }
 
+        public HashMap<int, FileTransfer> get_files_by_ids(Gee.Collection<int> ids, Conversation? conversation) {
+            var ret = new HashMap<int, FileTransfer>();
+            var missing = new ArrayList<int>();
+            foreach (int id in ids) {
+                FileTransfer? cached = files_by_db_id[id];
+                if (cached != null) {
+                    ret[id] = cached;
+                } else if (!missing.contains(id)) {
+                    missing.add(id);
+                }
+            }
+            if (missing.is_empty) return ret;
+
+            var placeholders = new StringBuilder();
+            string[] args = new string[missing.size];
+            for (int i = 0; i < missing.size; i++) {
+                if (i > 0) placeholders.append(",");
+                placeholders.append("?");
+                args[i] = missing[i].to_string();
+            }
+            foreach (Row row in db.file_transfer.select().where(@"$(db.file_transfer.id) IN ($(placeholders.str))", args)) {
+                FileTransfer? file_transfer = create_file_from_row_opt(new RowOption(row), conversation);
+                if (file_transfer != null) ret[file_transfer.id] = file_transfer;
+            }
+            return ret;
+        }
+
         // Http file transfers store the corresponding message id in the `info` field
-        public FileTransfer? get_file_by_message_id(int id, Conversation conversation) {
-            FileTransfer? file_transfer = files_by_message_id[id];
+        public FileTransfer? get_file_by_message_id(int id, Conversation conversation) {            FileTransfer? file_transfer = files_by_message_id[id];
             if (file_transfer != null) {
                 return file_transfer;
             }
@@ -74,6 +100,33 @@ namespace Dino {
 
             RowOption row_option = db.file_transfer_group.select().with(db.file_transfer_group.id, "=", id).row();
             return row_option.is_present() ? create_file_group_from_row(row_option.inner, conversation) : null;
+        }
+
+        public HashMap<int, FileTransferGroup> get_file_groups_by_ids(Gee.Collection<int> ids, Conversation conversation) {
+            var ret = new HashMap<int, FileTransferGroup>();
+            var missing = new ArrayList<int>();
+            foreach (int id in ids) {
+                FileTransferGroup? cached = file_group_by_db_id[id];
+                if (cached != null) {
+                    ret[id] = cached;
+                } else if (!missing.contains(id)) {
+                    missing.add(id);
+                }
+            }
+            if (missing.is_empty) return ret;
+
+            var placeholders = new StringBuilder();
+            string[] args = new string[missing.size];
+            for (int i = 0; i < missing.size; i++) {
+                if (i > 0) placeholders.append(",");
+                placeholders.append("?");
+                args[i] = missing[i].to_string();
+            }
+            foreach (Row row in db.file_transfer_group.select().where(@"$(db.file_transfer_group.id) IN ($(placeholders.str))", args)) {
+                FileTransferGroup? file_group = create_file_group_from_row(row, conversation);
+                if (file_group != null) ret[file_group.id] = file_group;
+            }
+            return ret;
         }
 
         public FileTransferGroup get_file_group_by_message_id(int id, Conversation conversation) {
@@ -146,8 +199,9 @@ namespace Dino {
         private void cache_file(FileTransfer file_transfer) {
             files_by_db_id[file_transfer.id] = file_transfer;
 
-            if (file_transfer.info != null && file_transfer.info != "") {
-                files_by_message_id[int.parse(file_transfer.info)] = file_transfer;
+            int message_id = -1;
+            if (file_transfer.info != null && int.try_parse(file_transfer.info, out message_id)) {
+                files_by_message_id[message_id] = file_transfer;
 
                 if (file_transfer.file_sharing_id != null && file_transfer.info != null) {
                     string combined_identifier = file_transfer.info + file_transfer.file_sharing_id;

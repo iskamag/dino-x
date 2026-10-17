@@ -41,6 +41,33 @@ namespace Dino {
             return create_call_from_row_opt(row_option, conversation);
         }
 
+        public HashMap<int, Call> get_calls_by_ids(Gee.Collection<int> ids, Conversation conversation) {
+            var ret = new HashMap<int, Call>();
+            var missing = new ArrayList<int>();
+            foreach (int id in ids) {
+                Call? cached = calls_by_db_id[id];
+                if (cached != null) {
+                    ret[id] = cached;
+                } else if (!missing.contains(id)) {
+                    missing.add(id);
+                }
+            }
+            if (missing.is_empty) return ret;
+
+            var placeholders = new StringBuilder();
+            string[] args = new string[missing.size];
+            for (int i = 0; i < missing.size; i++) {
+                if (i > 0) placeholders.append(",");
+                placeholders.append("?");
+                args[i] = missing[i].to_string();
+            }
+            foreach (Row row in db.call.select().where(@"$(db.call.id) IN ($(placeholders.str))", args)) {
+                Call? call = create_call_from_row_opt(new RowOption(row), conversation);
+                if (call != null) ret[call.id] = call;
+            }
+            return ret;
+        }
+
         private Call? create_call_from_row_opt(RowOption row_opt, Conversation conversation) {
             if (!row_opt.is_present()) return null;
 

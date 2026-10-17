@@ -474,8 +474,10 @@ public class FileManager : StreamInteractionModule, Object {
     }
 
     public Message? get_message_for_file_transfer(FileTransfer file_transfer, Conversation conversation) {
-        if ((file_transfer.provider == 0 || file_transfer.provider == 2) && file_transfer.info != null) {
-            return stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_id(int.parse(file_transfer.info), conversation);
+        int message_id = -1;
+        if ((file_transfer.provider == 0 || file_transfer.provider == 2) && file_transfer.info != null
+                && int.try_parse(file_transfer.info, out message_id)) {
+            return stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_id(message_id, conversation);
         }
         return null;
     }

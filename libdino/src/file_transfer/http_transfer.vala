@@ -57,7 +57,9 @@ namespace Dino {
             Conversation? conversation = stream_interactor.get_module(ConversationManager.IDENTITY).get_conversation(file_transfer.counterpart.bare_jid, file_transfer.account);
             if (conversation == null) return null;
 
-            Message? message = stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_id(int.parse(file_transfer.info), conversation);
+            int message_id = -1;
+            if (file_transfer.info == null || !int.try_parse(file_transfer.info, out message_id)) return null;
+            Message? message = stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_id(message_id, conversation);
             if (message == null) return null;
 
             var receive_data = new HttpFileReceiveData();
@@ -233,7 +235,11 @@ namespace Dino {
             Conversation? conversation = stream_interactor.get_module(ConversationManager.IDENTITY).get_conversation(file_transfer.counterpart.bare_jid, file_transfer.account);
             if (conversation == null) throw new FileReceiveError.GET_METADATA_FAILED("No conversation");
 
-            Message? message = stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_id(int.parse(file_transfer.info), conversation);
+            int message_id = -1;
+            if (file_transfer.info == null || !int.try_parse(file_transfer.info, out message_id)) {
+                throw new FileReceiveError.GET_METADATA_FAILED("File transfer has no valid message reference");
+            }
+            Message? message = stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_id(message_id, conversation);
             if (message == null) throw new FileReceiveError.GET_METADATA_FAILED("No message");
 
             var file_meta = new HttpFileMeta();

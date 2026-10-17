@@ -106,6 +106,66 @@ public class MessageStorage : StreamInteractionModule, Object {
         return create_message_from_row_opt(row_option, conversation);
     }
 
+    public HashMap<int, Message> get_messages_by_ids(Gee.Collection<int> ids, Conversation conversation) {
+        var ret = new HashMap<int, Message>();
+        var missing = new ArrayList<int>();
+        foreach (int id in ids) {
+            Message? cached = messages_by_db_id[id];
+            if (cached != null) {
+                touch_message(cached);
+                ret[id] = cached;
+            } else if (!missing.contains(id)) {
+                missing.add(id);
+            }
+        }
+        if (missing.is_empty) return ret;
+
+        var placeholders = new StringBuilder();
+        string[] args = new string[missing.size];
+        for (int i = 0; i < missing.size; i++) {
+            if (i > 0) placeholders.append(",");
+            placeholders.append("?");
+            args[i] = missing[i].to_string();
+        }
+        var query = db.message.select()
+                .where(@"$(db.message.id) IN ($(placeholders.str))", args)
+                .outer_join_with(db.message_occupant_id, db.message_occupant_id.message_id, db.message.id)
+                .outer_join_with(db.message_correction, db.message_correction.message_id, db.message.id)
+                .outer_join_with(db.reply, db.reply.message_id, db.message.id);
+
+        foreach (Row row in query) {
+            Message? message = create_message_from_row(row, conversation);
+            if (message != null) ret[message.id] = message;
+        }
+        return ret;
+    }
+
+    public void preload_body_meta(Gee.Collection<Message> messages) {
+        var ids = new ArrayList<int>();
+        foreach (Message message in messages) {
+            if (!message.body_meta_loaded && !ids.contains(message.id)) ids.add(message.id);
+        }
+        if (ids.is_empty) return;
+
+        var rows_by_message = new HashMap<int, ArrayList<Row>>();
+        var placeholders = new StringBuilder();
+        string[] args = new string[ids.size];
+        for (int i = 0; i < ids.size; i++) {
+            if (i > 0) placeholders.append(",");
+            placeholders.append("?");
+            args[i] = ids[i].to_string();
+        }
+        foreach (Row row in db.body_meta.select().where(@"$(db.body_meta.message_id) IN ($(placeholders.str))", args)) {
+            int message_id = row[db.body_meta.message_id];
+            if (!rows_by_message.has_key(message_id)) rows_by_message[message_id] = new ArrayList<Row>();
+            rows_by_message[message_id].add(row);
+        }
+        foreach (Message message in messages) {
+            var rows = rows_by_message[message.id];
+            message.set_body_meta_rows(rows ?? new ArrayList<Row>());
+        }
+    }
+
     public Message? get_message_by_referencing_id(string id, Conversation conversation) {
         if (conversation.type_ == Conversation.Type.CHAT) {
             return stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_stanza_id(id, conversation);

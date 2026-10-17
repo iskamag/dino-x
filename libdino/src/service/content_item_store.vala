@@ -42,12 +42,109 @@ public class ContentItemStore : StreamInteractionModule, Object {
         collection_conversations.unset(conversation);
     }
 
+    private class ContentItemRow {
+        public int id;
+        public int content_type;
+        public int foreign_id;
+        public DateTime time;
+    }
+
     private Gee.List<ContentItem> get_items_from_query(QueryBuilder select, Conversation conversation) {
-        Gee.TreeSet<ContentItem> items = new Gee.TreeSet<ContentItem>(ContentItem.compare_func);
+        var rows = new ArrayList<ContentItemRow>();
+        var message_ids = new HashSet<int>();
+        var file_ids = new HashSet<int>();
+        var call_ids = new HashSet<int>();
+        var file_group_ids = new HashSet<int>();
 
         foreach (var row in select) {
-            ContentItem? content_item = get_item_from_row(row, conversation);
-            if (content_item != null) items.add(content_item);
+            var item_row = new ContentItemRow() {
+                id = row[db.content_item.id],
+                content_type = row[db.content_item.content_type],
+                foreign_id = row[db.content_item.foreign_id],
+                time = new DateTime.from_unix_utc(row[db.content_item.time])
+            };
+            rows.add(item_row);
+            switch (item_row.content_type) {
+                case 1: message_ids.add(item_row.foreign_id); break;
+                case 2: file_ids.add(item_row.foreign_id); break;
+                case 3: call_ids.add(item_row.foreign_id); break;
+                case 4: file_group_ids.add(item_row.foreign_id); break;
+            }
+        }
+
+        var message_storage = stream_interactor.get_module(MessageStorage.IDENTITY);
+        var file_storage = stream_interactor.get_module(FileTransferStorage.IDENTITY);
+        var messages = message_storage.get_messages_by_ids(message_ids, conversation);
+        var files = file_storage.get_files_by_ids(file_ids, conversation);
+        var calls = stream_interactor.get_module(CallStore.IDENTITY).get_calls_by_ids(call_ids, conversation);
+        var file_groups = file_storage.get_file_groups_by_ids(file_group_ids, conversation);
+
+        // File items can reference the message that carried them.
+        var file_message_ids = new HashSet<int>();
+        foreach (FileTransfer file_transfer in files.values) {
+            int file_message_id = -1;
+            if ((file_transfer.provider == FileManager.HTTP_PROVIDER_ID || file_transfer.provider == FileManager.SFS_PROVIDER_ID)
+                    && file_transfer.info != null && int.try_parse(file_transfer.info, out file_message_id)) {
+                file_message_ids.add(file_message_id);
+            }
+        }
+        if (!file_message_ids.is_empty) {
+            var file_messages = message_storage.get_messages_by_ids(file_message_ids, conversation);
+            foreach (var entry in file_messages.entries) {
+                messages[entry.key] = entry.value;
+            }
+        }
+        message_storage.preload_body_meta(messages.values);
+
+        Gee.TreeSet<ContentItem> items = new Gee.TreeSet<ContentItem>(ContentItem.compare_func);
+        foreach (ContentItemRow row in rows) {
+            ContentItem? content_item = null;
+            switch (row.content_type) {
+                case 1: {
+                    Message? message = messages[row.foreign_id];
+                    if (message != null) {
+                        var message_item = new MessageItem(message, conversation, row.id);
+                        message_item.time = row.time; // In case of message corrections, the original time should be used
+                        content_item = message_item;
+                    }
+                    break;
+                }
+                case 2: {
+                    FileTransfer? file_transfer = files[row.foreign_id];
+                    if (file_transfer != null) {
+                        Message? message = null;
+                        int file_message_id = -1;
+                        if ((file_transfer.provider == FileManager.HTTP_PROVIDER_ID || file_transfer.provider == FileManager.SFS_PROVIDER_ID)
+                                && file_transfer.info != null && int.try_parse(file_transfer.info, out file_message_id)) {
+                            message = messages[file_message_id];
+                        }
+                        content_item = new FileItem(file_transfer, conversation, row.id, message);
+                    }
+                    break;
+                }
+                case 3: {
+                    Call? call = calls[row.foreign_id];
+                    if (call != null) {
+                        content_item = new CallItem(call, conversation, row.id);
+                    }
+                    break;
+                }
+                case 4: {
+                    FileTransferGroup? file_group = file_groups[row.foreign_id];
+                    if (file_group != null) {
+                        content_item = new FileGroupItem(file_group, conversation, row.id);
+                    }
+                    break;
+                }
+                default:
+                    warning("Unknown content item type: %i", row.content_type);
+                    break;
+            }
+            if (content_item != null) {
+                items.add(content_item);
+            } else {
+                warning("Bad content type %i or non existing content item %i", row.content_type, row.foreign_id);
+            }
         }
 
         Gee.List<ContentItem> ret = new ArrayList<ContentItem>();
@@ -145,7 +242,8 @@ public class ContentItemStore : StreamInteractionModule, Object {
         if (file_item != null) {
             if (file_item.file_transfer.provider != 0 || file_item.file_transfer.info == null) return null;
 
-            int message_db_id = int.parse(file_item.file_transfer.info);
+            int message_db_id;
+            if (!int.try_parse(file_item.file_transfer.info, out message_db_id)) return null;
             return stream_interactor.get_module(MessageStorage.IDENTITY).get_message_by_id(message_db_id, conversation);
         }
         MessageItem? message_item = content_item as MessageItem;
