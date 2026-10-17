@@ -30,6 +30,7 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
     private Gee.TreeSet<Plugins.MetaConversationItem> meta_items = new TreeSet<Plugins.MetaConversationItem>(compare_meta_items);
     private Gee.HashMap<Plugins.MetaConversationItem, ConversationItemSkeleton> item_item_skeletons = new Gee.HashMap<Plugins.MetaConversationItem, ConversationItemSkeleton>();
     private Gee.HashMap<Plugins.MetaConversationItem, Widget> widgets = new Gee.HashMap<Plugins.MetaConversationItem, Widget>();
+    private Gee.HashMap<Widget, Plugins.MetaConversationItem> widget_items = new Gee.HashMap<Widget, Plugins.MetaConversationItem>();
     private ContentProvider content_populator;
     private SubscriptionNotitication subscription_notification;
 
@@ -176,6 +177,7 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
             currently_highlighted.remove_css_class("highlight");
             currently_highlighted = null;
         }
+        current_meta_item = null;
         message_menu_box.visible = false;
     }
 
@@ -188,40 +190,32 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
 
         last_y = y;
 
-        // Get widget under pointer
-        int h = 0;
-        Widget? w = null;
-        foreach (Plugins.MetaConversationItem item in meta_items) {
-            Widget widget = widgets[item];
-            h += widget.get_allocated_height() + widget.margin_top + widget.margin_bottom;
-            if (h >= y) {
-                w = widget;
+        // Find the item widget under the pointer.
+        Widget? w = main.pick(x, y, PickFlags.DEFAULT);
+        Plugins.MetaConversationItem? item = null;
+        while (w != null && w != main) {
+            if (widget_items.has_key(w)) {
+                item = widget_items[w];
                 break;
             }
-        };
+            w = w.get_parent();
+        }
+        if (item == null) w = null;
 
         if (currently_highlighted != null) currently_highlighted.remove_css_class("highlight");
 
         currently_highlighted = null;
-        current_meta_item = null;
+        Plugins.MetaConversationItem? previous_meta_item = current_meta_item;
+        current_meta_item = item as ContentMetaItem;
+        if (previous_meta_item != current_meta_item) update_message_menu();
 
         if (w == null) {
-            update_message_menu();
             return;
         }
 
         // Get widget coordinates in main
         double widget_x, widget_y;
         w.translate_coordinates(main, 0, 0, out widget_x, out widget_y);
-
-        // Get MessageItem
-        foreach (Plugins.MetaConversationItem item in item_item_skeletons.keys) {
-            if (item_item_skeletons[item].get_widget() == w) {
-                current_meta_item = item as ContentMetaItem;
-            }
-        }
-
-        update_message_menu();
 
         if (current_meta_item != null) {
             // Highlight widget
@@ -533,6 +527,7 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
         if (skeleton != null) {
             main.remove(skeleton.get_widget());
             widgets.unset(item);
+            widget_items.unset(skeleton.get_widget());
             item_item_skeletons.unset(item);
 
             if (item is ContentMetaItem) {
@@ -584,6 +579,7 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
         // Insert widget
         Widget widget = item_skeleton.get_widget();
         widgets[item] = widget;
+        widget_items[widget] = item;
         widget.insert_after(main, is_lowest ? null : item_item_skeletons[lower_item].get_widget());
 
         if (lower_item != null) {
@@ -607,7 +603,7 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
         // If an item from the past was added, add everything between that item and the (post-)first present item
         if (is_lowest) {
             Dino.Application app = Dino.Application.get_default();
-            if (meta_items.size == 1) {
+            if (meta_items.size == 0) {
                 foreach (Plugins.ConversationAdditionPopulator populator in app.plugin_registry.conversation_addition_populators) {
                     populator.populate_timespan(conversation, item.time, new DateTime.now_utc());
                 }
@@ -889,6 +885,7 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
             widget.dispose();
         }
         widgets.clear();
+        widget_items.clear();
 
         Widget? notification = notifications.get_first_child();
         while (notification != null) {
