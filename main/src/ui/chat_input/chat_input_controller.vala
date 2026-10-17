@@ -129,6 +129,9 @@ public class ChatInputController : Object {
     }
 
     public void add_file_transfer(File file) {
+        foreach (File queued in files_to_send) {
+            if (queued.equal(file)) return;
+        }
         files_to_send.add(file);
         chat_input.add_file(file);
     }

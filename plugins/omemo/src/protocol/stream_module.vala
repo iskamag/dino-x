@@ -259,7 +259,8 @@ public class StreamModule : XmppStreamModule {
         lock (device_ignore_time) {
             string id = jid.bare_jid.to_string() + @":$device_id";
             if (device_ignore_time.has_key(id)) {
-                return new DateTime.now_utc().difference(device_ignore_time[id]) < IGNORE_TIME;
+                if (new DateTime.now_utc().difference(device_ignore_time[id]) < IGNORE_TIME) return true;
+                device_ignore_time.unset(id);
             }
         }
         return false;

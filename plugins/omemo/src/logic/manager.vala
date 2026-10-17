@@ -9,6 +9,7 @@ namespace Dino.Plugins.Omemo {
 public enum KeyFetchResult {
     OK,
     UNSUPPORTED,
+    NO_TRUSTED_DEVICE,
     FAILED
 }
 
@@ -82,7 +83,6 @@ public class Manager : StreamInteractionModule, Object {
         public int waiting_own_sessions { get; set; }
         public bool waiting_own_devicelist { get; set; }
         public int waiting_other_devicelists { get; set; }
-        public bool force_next_attempt { get; set; }
         public bool will_send_now { get; private set; }
         public bool active_send_attempt { get; set; }
         // Devices whose encryption failed with UNKNOWN, per recipient. Their
@@ -327,30 +327,72 @@ public class Manager : StreamInteractionModule, Object {
                 if (msg.account.equals(account)) pending.add(msg);
             }
         }
+        var send_now = new ArrayList<Entities.Message>();
         foreach (var msg in pending) {
             MessageState? state = message_states[msg];
             if (state == null) continue;
+            // A send attempt that ran while the stream was already gone never
+            // reached pre_message_send, so the flag can still be set.
+            state.active_send_attempt = false;
             request_missing_keys(stream, account, msg, (!)state);
+            if (state.should_retry_now()) {
+                state.active_send_attempt = true;
+                send_now.add(msg);
+            }
+        }
+        foreach (var msg in send_now) {
+            if (msg.counterpart == null) {
+                reset_send_attempt(msg);
+                continue;
+            }
+            Entities.Conversation? conv = stream_interactor.get_module(ConversationManager.IDENTITY).get_conversation(((!)msg.counterpart), account);
+            if (conv == null) {
+                reset_send_attempt(msg);
+                continue;
+            }
+            stream_interactor.get_module(MessageProcessor.IDENTITY).send_xmpp_message(msg, (!)conv, true);
         }
     }
 
     private void on_account_removed(Account account) {
-        lock (message_states) {
-            var remove = new ArrayList<Entities.Message>();
-            foreach (var msg in message_states.keys) {
-                if (msg.account.equals(account)) remove.add(msg);
+        // account_removed is also emitted for "reconnect" and "disable account"
+        // (StreamInteractor.disconnect_account). Only drop the revival states
+        // once the account row is really gone.
+        Timeout.add(100, () => {
+            Dino.Application? app = Dino.Application.get_default();
+            if (app == null) return false;
+            if (app.db.account.select().with(app.db.account.bare_jid, "=", account.bare_jid.to_string()).count() > 0) return false;
+            lock (message_states) {
+                var remove = new ArrayList<Entities.Message>();
+                foreach (var msg in message_states.keys) {
+                    if (msg.account.equals(account)) remove.add(msg);
+                }
+                foreach (var msg in remove) {
+                    message_states.unset(msg);
+                }
             }
-            foreach (var msg in remove) {
-                message_states.unset(msg);
-            }
-        }
-        reset_retries(account);
+            reset_retries(account);
+            return false;
+        });
     }
 
     private void on_item_deleted(ContentItem item) {
         if (!(item is MessageItem)) return;
+        string? deleted_stanza_id = ((MessageItem) item).message.stanza_id;
+        if (deleted_stanza_id == null) return;
         lock (message_states) {
-            message_states.unset(((MessageItem) item).message);
+            var remove = new ArrayList<Entities.Message>();
+            foreach (var pending in message_states.keys) {
+                // Match by the stable id: the deletion service clears the body
+                // of its own instance, and the map may hold a different one.
+                if (pending.stanza_id == deleted_stanza_id) remove.add(pending);
+            }
+            foreach (var pending in remove) {
+                // The row stays UNSENT in the database; without a terminal mark
+                // it would be re-sent as an empty message on reconnect.
+                pending.marked = Entities.Message.Marked.NONE;
+                message_states.unset(pending);
+            }
         }
     }
 
@@ -408,6 +450,7 @@ public class Manager : StreamInteractionModule, Object {
         }
 
         //Get all messages that needed the devicelist and determine if we can now send them
+        bool can_send = stream_interactor.get_stream(account) != null;
         HashSet<Entities.Message> send_now = new HashSet<Entities.Message>();
         lock (message_states) {
             foreach (Entities.Message msg in message_states.keys) {
@@ -419,8 +462,13 @@ public class Manager : StreamInteractionModule, Object {
                     state.waiting_other_devicelists--;
                 }
                 if (state.should_retry_now()) {
-                    send_now.add(msg);
-                    state.active_send_attempt = true;
+                    if (can_send) {
+                        send_now.add(msg);
+                        state.active_send_attempt = true;
+                    } else {
+                        // Leave the state ready for resume_pending_messages.
+                        state.active_send_attempt = false;
+                    }
                 }
             }
         }
@@ -533,19 +581,25 @@ public class Manager : StreamInteractionModule, Object {
         // waiting for; bookkeeping fetches from the key list are left alone.
         if (!message_waits_for_device(account, jid, device_id)) return;
         XmppStream? stream = stream_interactor.get_stream(account);
-        if (stream != null) {
-            StreamModule? module = stream.get_module(StreamModule.IDENTITY);
-            if (module != null) module.ignore_device(jid, device_id);
-        }
+        // During a disconnect the stream is NULL before detach() is reached.
+        // Do not consume the waiter in that case: no key request can be issued
+        // and the message would be stranded with no wake-up.
+        if (stream == null) return;
+        StreamModule? module = stream.get_module(StreamModule.IDENTITY);
+        if (module != null) module.ignore_device(jid, device_id);
         continue_message_sending(account, jid, device_id);
     }
 
     private void mark_waiting_messages_wont_send(Account account, Jid jid, bool only_devicelist) {
+        bool own_jid = account.bare_jid.equals(jid);
         lock (message_states) {
             foreach (Entities.Message msg in message_states.keys) {
                 if (!message_targets_jid(msg, account, jid)) continue;
                 MessageState state = message_states[msg];
-                if (only_devicelist && state.waiting_other_devicelists <= 0 && !state.waiting_own_devicelist) continue;
+                if (only_devicelist) {
+                    if (own_jid && !state.waiting_own_devicelist) continue;
+                    if (!own_jid && state.waiting_other_devicelists <= 0) continue;
+                }
                 msg.marked = Entities.Message.Marked.WONTSEND;
             }
         }
@@ -631,6 +685,7 @@ public class Manager : StreamInteractionModule, Object {
 
     private void continue_message_sending(Account account, Jid jid, int32 device_id) {
         //Get all messages waiting and determine if they can now be sent
+        bool can_send = stream_interactor.get_stream(account) != null;
         HashSet<Entities.Message> send_now = new HashSet<Entities.Message>();
         lock (message_states) {
             foreach (Entities.Message msg in message_states.keys) {
@@ -645,8 +700,13 @@ public class Manager : StreamInteractionModule, Object {
                     state.waiting_other_sessions--;
                 }
                 if (state.should_retry_now()) {
-                    send_now.add(msg);
-                    state.active_send_attempt = true;
+                    if (can_send) {
+                        send_now.add(msg);
+                        state.active_send_attempt = true;
+                    } else {
+                        // Leave the state ready for resume_pending_messages.
+                        state.active_send_attempt = false;
+                    }
                 }
             }
         }
@@ -725,14 +785,18 @@ public class Manager : StreamInteractionModule, Object {
         if (identity_id < 0) return false;
         string address = jid.bare_jid.to_string();
         // Keep the pending key so the decision stays visible and can be
-        // revisited; only the trust level changes.
+        // revisited; only the trust level changes. The device is excluded from
+        // get_trusted_devices, so release any message waiter that was blocked
+        // on it instead of retaining the state forever.
         db.identity_meta.update()
             .with(db.identity_meta.identity_id, "=", identity_id)
             .with(db.identity_meta.address_name, "=", address)
             .with(db.identity_meta.device_id, "=", device_id)
             .set(db.identity_meta.trust_level, TrustLevel.UNTRUSTED)
             .perform();
-        mark_waiting_messages_wont_send(account, jid, false);
+        if (message_waits_for_device(account, jid, device_id)) {
+            continue_message_sending(account, jid, device_id);
+        }
         trust_manager.bad_message_state_updated(account, jid, device_id);
         return true;
     }
@@ -810,7 +874,7 @@ public class Manager : StreamInteractionModule, Object {
             // The device list is known; without a usable device the contact is
             // effectively unsupported (empty list, all devices rejected, or a
             // pending key change).
-            return trust_manager.get_trusted_devices(account, jid).size > 0 ? KeyFetchResult.OK : KeyFetchResult.UNSUPPORTED;
+            return trust_manager.get_trusted_devices(account, jid).size > 0 ? KeyFetchResult.OK : KeyFetchResult.NO_TRUSTED_DEVICE;
         }
         XmppStream? stream = stream_interactor.get_stream(account);
         if (stream == null) return KeyFetchResult.FAILED;

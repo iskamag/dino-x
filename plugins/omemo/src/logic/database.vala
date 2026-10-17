@@ -129,7 +129,9 @@ public class Database : Qlite.Database {
         public QueryBuilder get_known_devices(int identity_id, string address_name) {
             return this.with_address(identity_id, address_name)
                 .with(this.trust_level, "!=", TrustLevel.UNKNOWN)
-                .without_null(this.identity_key_public_base64);
+                .without_null(this.identity_key_public_base64)
+                // Changed keys are shown by the dedicated pending row only.
+                .with_null(this.pending_identity_key_public_base64);
         }
 
         public QueryBuilder get_unknown_devices(int identity_id, string address_name) {

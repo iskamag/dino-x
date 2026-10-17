@@ -322,7 +322,12 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
         if (old_key == null || new_key == null) return;
 
         Adw.ActionRow action_row = new Adw.ActionRow() { use_markup = true };
-        action_row.title = _("Key changed");
+        if ((TrustLevel) device[plugin.db.identity_meta.trust_level] == TrustLevel.UNTRUSTED) {
+            action_row.title = _("Key changed (rejected)");
+            action_row.add_css_class("error");
+        } else {
+            action_row.title = _("Key changed");
+        }
         action_row.subtitle = _("Known key: %s\nNew key: %s").printf(
             fingerprint_markup(fingerprint_from_base64(old_key)),
             fingerprint_markup(fingerprint_from_base64(new_key)));
@@ -342,9 +347,10 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
             if (app == null) return;
             Manager? manager = app.stream_interactor.get_module(Manager.IDENTITY);
             if (manager == null) return;
-            if (manager.accept_pending_identity_key(account, jid, device[plugin.db.identity_meta.device_id], new_key)) {
-                redraw_key_list();
-            }
+            // Redraw either way: a false return means the pending key changed
+            // again while this row was displayed.
+            manager.accept_pending_identity_key(account, jid, device[plugin.db.identity_meta.device_id], new_key);
+            redraw_key_list();
         });
 
         reject_button.clicked.connect(() => {

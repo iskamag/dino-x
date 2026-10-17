@@ -41,6 +41,8 @@ Legend: **V** = reproduced/verified at runtime, **T** = code trace only.
 | O19 | `WAIT` with a known own device list but zero usable own devices has no request/wake-up | Medium | T | fixed |
 | O20 | MUC/1:1 pending messages are not resumed on XEP-0198 resume | Medium | T | fixed |
 | O21 | Deleted pending messages could still be sent; body-hash key corruption | Medium | T | fixed |
+| O22 | A disconnect-time bundle failure released the waiter with no stream left, stranding MUC messages | Medium | T | fixed |
+| O23 | A deleted queued message stayed `UNSENT` and was re-sent empty on reconnect | Medium | T | fixed |
 | I1 | Pre-send attachment preview uses `Gtk.Picture.file`; GTK 4.24 resolves GIF/WebP/BMP to a transparent `GtkSvg` placeholder | High | V | fixed |
 | I2 | Chat input preview does not apply EXIF orientation | Low | V | fixed |
 | I3 | `ImagePreview.decode_webp` passes destination offsets as source offsets to `composite()` | Medium | T | fixed |
@@ -235,17 +237,36 @@ implementation. Their blocking findings and the resulting changes:
 | Full-JID recipients put the unknown-device map under a different key than its consumers | `EncryptState`/session addresses/lookup normalized to the bare JID; remaining UI/DB full-JID uses fixed |
 | `WAIT` with `own_list == true` and no own device had no request/wake-up | `SendPolicy` returns `WONT_SEND` once the own list is known; `own_list == false` still waits |
 | `clear_files()` kept `file_widgets` alive, leaking every sent attachment | `file_widgets.clear()`; `dispose()` cancels previews; duplicate add guarded; test covers remove/clear |
-| Device-list retries could be shortened by ad-hoc requests | Attempts increment only when no retry timer is armed; 3 attempts with a 15 s OMEMO PEP timeout (~1 min worst case) |
+| Device-list retries could be shortened by ad-hoc requests | Attempts increment only when no retry timer is armed; 3 attempts with a 15 s OMEMO PEP timeout (~88 s worst case: 15 s initial + 3×(delay+15 s), delays 4/8/16) |
 | `is_known_address()` made the "does not support OMEMO" guard pass on the second toggle for an empty list | `ensure_get_keys_for_jid` returns `UNSUPPORTED` when the known address has no usable device |
 | Offline key acceptance left an old session, and rejecting a key was one-way | Session/IKS updates happen without a stream; a refetch is queued for the next stream; reject keeps the pending key visible so it can be revisited; accept verifies the fingerprint the user saw |
 | MUC messages were not resumed on XEP-0198 resume | `stream_resumed` hook revives pending key requests |
 | Deleted pending messages could still be sent; body mutation corrupted the state hash map | Stable stanza-id hash + `MessageDeletion` hook |
 | Stale callbacks after reconnect | Stream generation counter (already in the first pass) |
 
+Second pass (after the first fix commit) found one new blocking item and a few
+follow-ups:
+
+| Finding | Resolution |
+|---|---|
+| `on_bundle_fetch_failed` released the waiter even when the stream was already gone (`ConnectionManager` marks DISCONNECTED before `detach()`); `send_xmpp_message` then returned before `pre_message_send`, leaving `active_send_attempt = true`, counters at 0 and no request — MUC messages were stranded until rejoin | Return without consuming the waiter when there is no live stream; `resume_pending_messages` clears stale `active_send_attempt` values and re-sends states whose counters are all zero |
+| A deleted queued message kept `UNSENT` with an empty body, so reconnect re-sent an empty OMEMO message | On `MessageDeletion.item_deleted`, match pending states by stable stanza id, mark them `NONE` and drop them |
+| Rejecting a changed key made the device appear in both the known-device list (old key) and the pending row | `get_known_devices` excludes devices with a pending key; only the dedicated row is shown |
+| "Known address but no usable device" was reported as "does not support OMEMO" | `KeyFetchResult.NO_TRUSTED_DEVICE` with a specific input status; sending stays blocked until a device is accepted |
+| A single transient bundle failure now drops that device from the send (ignore + immediate release) | Explicit trade-off for prompt sends; master did the same, and the device is retried by the next message after the one-minute ignore window |
+| Rejecting a changed key kept the notification and the message waiters alive forever | Reject settles the waiter (the device is excluded from encryption, so the message retries and fails/sends without it); `has_new_devices` ignores rejected pending rows; the row is labelled "Key changed (rejected)" |
+| `account_removed` is also emitted for reconnect/disable, so the new cleanup dropped revival states | The cleanup is deferred and only runs when the account row is actually gone from the main database |
+| The duplicate-add guard was view-only; the controller still queued the same file twice | `ChatInputController.add_file_transfer` dedupes by `File.equal` |
+| A stale fingerprint accept was a silent no-op | The pending row always redraws after the accept attempt, so the latest fingerprint is shown |
+| Expired `device_ignore_time` entries were never pruned | Pruned when observed expired |
+
 Retained as documented limitations: generic `send_iq_async` callers outside
-`Pubsub.request` still have no timeout; a room send still does the pre-existing
-per-recipient device query (cached within one pass now); animated attachments
-show their first frame; a restored-before-map HiDPI preview is decoded at 1x.
+`Pubsub.request` still have no timeout; `request_timeout_seconds` is set on the
+shared per-stream pubsub module (OMEMO is its only in-tree user); a room send
+still does the pre-existing per-recipient device query (cached within one pass
+now); animated attachments show their first frame; a restored-before-map HiDPI
+preview is decoded at 1x; MUC messages left `UNSENT` by a failed write are only
+re-sent on room rejoin (pre-existing).
 
 ---
 

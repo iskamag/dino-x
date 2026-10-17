@@ -91,7 +91,8 @@ public class Plugin : RootInterface, Object {
         if (identity_id < 0) return false;
 
         return db.identity_meta.get_new_devices(identity_id, jid.bare_jid.to_string()).count() > 0 ||
-            db.identity_meta.get_pending_identity_keys(identity_id, jid.bare_jid.to_string()).count() > 0;
+            db.identity_meta.get_pending_identity_keys(identity_id, jid.bare_jid.to_string())
+                .with(db.identity_meta.trust_level, "!=", TrustLevel.UNTRUSTED).count() > 0;
     }
 }
 
