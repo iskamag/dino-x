@@ -35,16 +35,14 @@ public class NamespaceState {
         this.parent = parent;
     }
 
-    public static NamespaceState with_assoc(NamespaceState old, string ns_uri, string name) {
-        var ret = new NamespaceState.with_parent(old);
-        ret.add_assoc(ns_uri, name);
-        return ret;
+    public NamespaceState.with_assoc(NamespaceState old, string ns_uri, string name) {
+        this.parent = old;
+        add_assoc(ns_uri, name);
     }
 
-    public static NamespaceState with_current(NamespaceState old, string current_ns_uri) {
-        var ret = new NamespaceState.with_parent(old);
-        ret.current_ns_uri = current_ns_uri;
-        return ret;
+    public NamespaceState.with_current(NamespaceState old, string current_ns_uri) {
+        this.parent = old;
+        this.current_ns_uri = current_ns_uri;
     }
 
     public void add_assoc(string ns_uri, string name) {
