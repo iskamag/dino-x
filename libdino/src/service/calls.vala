@@ -368,6 +368,14 @@ namespace Dino {
                     // Ignore carbon from ourselves
                     if (from.equals(stream_interactor.get_account_full_jid(account))) return;
 
+                    // This device already accepted: keep its session and let the
+                    // peer's Jingle negotiation pick a winner. A later failure is
+                    // reported as "handled on another device".
+                    if (call.state == Call.State.ESTABLISHING || call.state == Call.State.IN_PROGRESS) {
+                        call_states[call].accepted_elsewhere = true;
+                        return;
+                    }
+
                     call.ourpart = from;
                     call.state = Call.State.OTHER_DEVICE;
                     remove_call_from_datastructures(call);

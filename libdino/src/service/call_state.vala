@@ -14,6 +14,8 @@ public class Dino.CallState : Object {
     public Jid? parent_muc { get; set; }
     public Jid? invited_to_group_call = null;
     public bool accepted { get; private set; default=false; }
+    // Another own device accepted while this device was already negotiating.
+    internal bool accepted_elsewhere = false;
 
     public bool use_cim = false;
     public string? cim_call_id = null;
@@ -52,7 +54,7 @@ public class Dino.CallState : Object {
     private static void on_watchdog_timeout(CallState call_state) {
         if (call_state.call.state == Call.State.ESTABLISHING ||
                 (call_state.call.direction == Call.DIRECTION_INCOMING && call_state.call.state == Call.State.RINGING)) {
-            call_state.call.state = Call.State.MISSED;
+            call_state.call.state = call_state.accepted_elsewhere ? Call.State.OTHER_DEVICE : Call.State.MISSED;
             call_state.terminated(call_state.call.account.bare_jid, null, null);
         }
     }
@@ -334,6 +336,8 @@ public class Dino.CallState : Object {
         }
         if (call.state == Call.State.IN_PROGRESS) {
             call.state = Call.State.ENDED;
+        } else if (accepted_elsewhere && (call.state == Call.State.RINGING || call.state == Call.State.ESTABLISHING)) {
+            call.state = Call.State.OTHER_DEVICE;
         } else if (call.state == Call.State.RINGING || call.state == Call.State.ESTABLISHING) {
             if (reason_name == Xep.Jingle.ReasonElement.DECLINE) {
                 call.state = Call.State.DECLINED;
