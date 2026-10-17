@@ -61,6 +61,35 @@ private void test_private_room_history() {
     } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
 }
 
+private void test_messages_after_backfilled() {
+    try {
+        var app = get_service_app();
+        var account = create_account(app);
+        var conversation = state_conversation(app, account, "peer@example.com");
+        var storage = app.stream_interactor.get_module(MessageStorage.IDENTITY);
+        var now = new DateTime.now_utc();
+
+        // Newer message inserted first, older message backfilled later with a higher id.
+        var newer = new Message("newer") {
+            account=account, counterpart=conversation.counterpart, ourpart=account.bare_jid,
+            direction=Message.DIRECTION_RECEIVED, type_=Message.Type.CHAT,
+            stanza_id=Xmpp.random_uuid(), time=now, local_time=now
+        };
+        storage.add_message(newer, conversation);
+        var older = new Message("older") {
+            account=account, counterpart=conversation.counterpart, ourpart=account.bare_jid,
+            direction=Message.DIRECTION_RECEIVED, type_=Message.Type.CHAT,
+            stanza_id=Xmpp.random_uuid(), time=now.add_minutes(-1), local_time=now.add_minutes(-1)
+        };
+        storage.add_message(older, conversation);
+        assert_true(older.id > newer.id);
+
+        var after = storage.get_messages_after_message(conversation, older.time, older.id, 10);
+        assert_cmpint(after.size, CompareOperator.EQ, 1);
+        assert_cmpstr(after[0].message.body, CompareOperator.EQ, "newer");
+    } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
+}
+
 private void test_dedupe_scopes_message_type() {
     var loop = new MainLoop();
     test_dedupe_scopes_message_type_async.begin((obj, result) => {
@@ -239,6 +268,7 @@ private void test_late_reply_widget() {
 
 private void add_message_state_regression_tests() {
     GLib.Test.add_func("/messages/dedupe-type-scope", test_dedupe_scopes_message_type);
+    GLib.Test.add_func("/messages/after-backfilled", test_messages_after_backfilled);
     GLib.Test.add_func("/messages/cold-server-id", test_cold_server_id_lookup);
     GLib.Test.add_func("/messages/private-room-history", test_private_room_history);
     GLib.Test.add_func("/messages/correction-retry", () => check_correction_transmission(false));
