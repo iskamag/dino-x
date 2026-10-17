@@ -93,6 +93,7 @@ public class MessageStorage : StreamInteractionModule, Object {
     public Message? get_message_by_id(int id, Conversation conversation) {
         Message? message = messages_by_db_id[id];
         if (message != null) {
+            touch_message(message);
             return message;
         }
 
@@ -117,6 +118,7 @@ public class MessageStorage : StreamInteractionModule, Object {
         if (messages_by_stanza_id.has_key(conversation)) {
             Message? message = messages_by_stanza_id[conversation][stanza_id];
             if (message != null) {
+                touch_message(message);
                 return message;
             }
         }
@@ -144,6 +146,7 @@ public class MessageStorage : StreamInteractionModule, Object {
         if (messages_by_server_id.has_key(conversation)) {
             Message? message = messages_by_server_id[conversation][server_id];
             if (message != null) {
+                touch_message(message);
                 return message;
             }
         }
@@ -200,6 +203,11 @@ public class MessageStorage : StreamInteractionModule, Object {
             messages_by_server_id[conversation][message.server_id] = message;
         }
 
+        touch_message(message);
+    }
+
+    private void touch_message(Message message) {
+        message_refs.remove(message);
         message_refs.insert(0, message);
         if (message_refs.size > 300) {
             message_refs.remove_at(message_refs.size - 1);

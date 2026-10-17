@@ -30,7 +30,6 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
     private Gee.TreeSet<Plugins.MetaConversationItem> meta_items = new TreeSet<Plugins.MetaConversationItem>(compare_meta_items);
     private Gee.HashMap<Plugins.MetaConversationItem, ConversationItemSkeleton> item_item_skeletons = new Gee.HashMap<Plugins.MetaConversationItem, ConversationItemSkeleton>();
     private Gee.HashMap<Plugins.MetaConversationItem, Widget> widgets = new Gee.HashMap<Plugins.MetaConversationItem, Widget>();
-    private Gee.List<Widget> widget_order = new Gee.ArrayList<Widget>();
     private ContentProvider content_populator;
     private SubscriptionNotitication subscription_notification;
 
@@ -534,7 +533,6 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
         if (skeleton != null) {
             main.remove(skeleton.get_widget());
             widgets.unset(item);
-            widget_order.remove(skeleton.get_widget());
             item_item_skeletons.unset(item);
 
             if (item is ContentMetaItem) {
@@ -581,12 +579,12 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
         // Fill datastructure
         ConversationItemSkeleton item_skeleton = new ConversationItemSkeleton(stream_interactor, conversation, item);
         item_item_skeletons[item] = item_skeleton;
-        int index = lower_item != null ? widget_order.index_of(item_item_skeletons[lower_item].get_widget()) + 1 : 0;
-        widget_order.insert(index, item_skeleton.get_widget());
+        bool is_lowest = lower_item == null;
 
         // Insert widget
-        widgets[item] = item_skeleton.get_widget();
-        widgets[item].insert_after(main, item_item_skeletons.has_key(lower_item) ? item_item_skeletons[lower_item].get_widget() : null);
+        Widget widget = item_skeleton.get_widget();
+        widgets[item] = widget;
+        widget.insert_after(main, is_lowest ? null : item_item_skeletons[lower_item].get_widget());
 
         if (lower_item != null) {
             if (can_merge(item, lower_item)) {
@@ -607,9 +605,9 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
         }
 
         // If an item from the past was added, add everything between that item and the (post-)first present item
-        if (index == 0) {
+        if (is_lowest) {
             Dino.Application app = Dino.Application.get_default();
-            if (widget_order.size == 1) {
+            if (meta_items.size == 1) {
                 foreach (Plugins.ConversationAdditionPopulator populator in app.plugin_registry.conversation_addition_populators) {
                     populator.populate_timespan(conversation, item.time, new DateTime.now_utc());
                 }
@@ -882,7 +880,6 @@ public class ConversationView : Widget, Plugins.ConversationItemCollection, Plug
         }
         content_items.clear();
         meta_items.clear();
-        widget_order.clear();
         foreach (var skeleton in item_item_skeletons.values) {
             skeleton.dispose();
         }
