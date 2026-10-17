@@ -15,6 +15,8 @@ class ModuleHardeningTest : Gee.TestCase {
         add_async_test("iq_write_failure_propagates", (cb) => { test_iq_write_failure.begin(cb); });
         add_async_test("iq_request_cancellation", (cb) => { test_iq_cancellation.begin(cb); });
         add_async_test("entity_time_failure_cleans_up", (cb) => { test_entity_time_failure.begin(cb); });
+        add_async_test("pubsub_write_failure_releases_listener", (cb) => { test_pubsub_write_failure.begin(cb); });
+        add_async_test("pubsub_timeout_releases_listener", (cb) => { test_pubsub_timeout.begin(cb); });
     }
 
     private class HardeningStream : IoXmppStream {
@@ -242,6 +244,76 @@ class ModuleHardeningTest : Gee.TestCase {
         presence.stanza.put_node(new StanzaNode.build(Presence.Stanza.NODE_PRIORITY));
         fail_if_not_eq_int(presence.priority, 0);
     }
+
+    private class SilentWriteStream : HardeningStream {
+        public override async void write_async(StanzaNode node, int io_priority = Priority.DEFAULT, Cancellable? cancellable = null) throws IOError {
+            // Pretend the write succeeded but never deliver an IQ result.
+        }
+    }
+
+    private class RequestOutcome : Object {
+        public bool called = false;
+        public bool success = true;
+    }
+
+    private static Jid hardening_jid(string jid) {
+        try {
+            return Jid.from_string(jid);
+        } catch (InvalidJidError e) {
+            assert_not_reached();
+        }
+    }
+
+    private async void test_pubsub_write_failure(Gee.TestFinishedCallback cb) {
+        var stream = new FailingWriteStream();
+        var iq_module = new Iq.Module();
+        stream.add_module(iq_module);
+        iq_module.attach(stream);
+        var pubsub = new Xep.Pubsub.Module();
+        stream.add_module(pubsub);
+
+        var outcome = new RequestOutcome();
+        pubsub.request(stream, hardening_jid("peer@example.org"), "node", (stream, jid, id, node, success) => {
+            outcome.called = true;
+            outcome.success = success;
+        });
+
+        var loop = new MainLoop();
+        Timeout.add(200, () => { loop.quit(); return false; });
+        loop.run();
+
+        fail_if_not(outcome.called, "pubsub listener was not released on write failure");
+        fail_if(outcome.success, "pubsub write failure reported as success");
+        cb();
+    }
+
+    private async void test_pubsub_timeout(Gee.TestFinishedCallback cb) {
+        var stream = new SilentWriteStream();
+        var iq_module = new Iq.Module();
+        stream.add_module(iq_module);
+        iq_module.attach(stream);
+        var pubsub = new Xep.Pubsub.Module();
+        stream.add_module(pubsub);
+        pubsub.request_timeout_seconds = 1;
+
+        var outcome = new RequestOutcome();
+        var loop = new MainLoop();
+        pubsub.request(stream, hardening_jid("peer@example.org"), "node", (stream, jid, id, node, success) => {
+            outcome.called = true;
+            outcome.success = success;
+            loop.quit();
+        });
+        uint guard_id = 0;
+        guard_id = Timeout.add_seconds(3, () => { guard_id = 0; loop.quit(); return false; });
+        loop.run();
+        if (guard_id != 0) Source.remove(guard_id);
+
+        fail_if_not(outcome.called, "pubsub listener was not released on timeout");
+        fail_if(outcome.success, "pubsub timeout reported as success");
+        cb();
+    }
+
 }
+
 
 }

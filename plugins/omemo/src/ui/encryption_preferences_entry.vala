@@ -103,7 +103,7 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
 
         //Show the normal devicelist
         var own_id = plugin.db.identity.row_with(plugin.db.identity.account_id, account.id)[plugin.db.identity.device_id];
-        foreach (Row device in plugin.db.identity_meta.get_known_devices(identity_id, jid.to_string())) {
+        foreach (Row device in plugin.db.identity_meta.get_known_devices(identity_id, jid.bare_jid.to_string())) {
             if(jid.equals(account.bare_jid) && device[plugin.db.identity_meta.device_id] == own_id) {
                 // If this is our own account, don't show this device twice (did it separately already)
                 continue;
@@ -112,8 +112,14 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
         }
 
         //Show any new devices for which the user must decide whether to accept or reject
-        foreach (Row device in plugin.db.identity_meta.get_new_devices(identity_id, jid.to_string())) {
+        foreach (Row device in plugin.db.identity_meta.get_new_devices(identity_id, jid.bare_jid.to_string())) {
             add_new_fingerprint(device);
+        }
+
+        // Changed identity keys are never auto-accepted. Show both the known
+        // and the refused fingerprint and require an explicit decision.
+        foreach (Row device in plugin.db.identity_meta.get_pending_identity_keys(identity_id, jid.bare_jid.to_string())) {
+            add_pending_identity_key(device);
         }
     }
 
@@ -136,7 +142,7 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
                 redraw_key_list();
             }
         });
-        foreach (Row device in plugin.db.identity_meta.get_unknown_devices(identity_id, jid.to_string())) {
+        foreach (Row device in plugin.db.identity_meta.get_unknown_devices(identity_id, jid.bare_jid.to_string())) {
             try {
                 module.fetch_bundle(stream, Jid.from_string(device[plugin.db.identity_meta.address_name]), device[plugin.db.identity_meta.device_id], false);
             } catch (InvalidJidError e) {
@@ -189,7 +195,7 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
         bool key_active = device[plugin.db.identity_meta.now_active];
         if (store != null) {
             try {
-                Address address = new Address(jid.to_string(), device[plugin.db.identity_meta.device_id]);
+                Address address = new Address(jid.bare_jid.to_string(), device[plugin.db.identity_meta.device_id]);
                 SessionRecord? session = null;
                 if (store.contains_session(address)) {
                     session = store.load_session(address);
@@ -242,7 +248,7 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
             int identity_id = plugin.db.identity.get_id(account.id);
             if (identity_id < 0) return false;
 
-            foreach (Row device in plugin.db.identity_meta.get_new_devices(identity_id, jid.to_string())) {
+            foreach (Row device in plugin.db.identity_meta.get_new_devices(identity_id, jid.bare_jid.to_string())) {
                 plugin.trust_manager.set_device_trust(account, jid, device[plugin.db.identity_meta.device_id], TrustLevel.TRUSTED);
                 add_fingerprint(device, TrustLevel.TRUSTED);
             }
@@ -304,6 +310,63 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
         control_box.append(reject_button);
         control_box.add_css_class("linked"); // .linked: Visually link the accept / reject buttons
 
+        action_row.add_suffix(control_box);
+
+        add_key_row(action_row);
+        displayed_ids.add(device[plugin.db.identity_meta.device_id]);
+    }
+
+    private void add_pending_identity_key(Row device) {
+        string? old_key = device[plugin.db.identity_meta.identity_key_public_base64];
+        string? new_key = device[plugin.db.identity_meta.pending_identity_key_public_base64];
+        if (old_key == null || new_key == null) return;
+
+        Adw.ActionRow action_row = new Adw.ActionRow() { use_markup = true };
+        if ((TrustLevel) device[plugin.db.identity_meta.trust_level] == TrustLevel.UNTRUSTED) {
+            action_row.title = _("Key changed (rejected)");
+            action_row.add_css_class("error");
+        } else {
+            action_row.title = _("Key changed");
+        }
+        action_row.subtitle = _("Known key: %s\nNew key: %s").printf(
+            fingerprint_markup(fingerprint_from_base64(old_key)),
+            fingerprint_markup(fingerprint_from_base64(new_key)));
+
+        Button accept_button = new Button() { visible = true, valign = Align.CENTER };
+        accept_button.set_icon_name("dino-check-plain-symbolic");
+        accept_button.add_css_class("suggested-action");
+        accept_button.tooltip_text = _("Accept new key");
+
+        Button reject_button = new Button() { visible = true, valign = Align.CENTER };
+        reject_button.set_icon_name("action-unavailable-symbolic");
+        reject_button.add_css_class("destructive-action");
+        reject_button.tooltip_text = _("Reject new key");
+
+        accept_button.clicked.connect(() => {
+            Dino.Application? app = Application.get_default() as Dino.Application;
+            if (app == null) return;
+            Manager? manager = app.stream_interactor.get_module(Manager.IDENTITY);
+            if (manager == null) return;
+            // Redraw either way: a false return means the pending key changed
+            // again while this row was displayed.
+            manager.accept_pending_identity_key(account, jid, device[plugin.db.identity_meta.device_id], new_key);
+            redraw_key_list();
+        });
+
+        reject_button.clicked.connect(() => {
+            Dino.Application? app = Application.get_default() as Dino.Application;
+            if (app == null) return;
+            Manager? manager = app.stream_interactor.get_module(Manager.IDENTITY);
+            if (manager == null) return;
+            if (manager.reject_pending_identity_key(account, jid, device[plugin.db.identity_meta.device_id])) {
+                redraw_key_list();
+            }
+        });
+
+        Box control_box = new Box(Gtk.Orientation.HORIZONTAL, 0) { visible = true, hexpand = true };
+        control_box.append(accept_button);
+        control_box.append(reject_button);
+        control_box.add_css_class("linked");
         action_row.add_suffix(control_box);
 
         add_key_row(action_row);

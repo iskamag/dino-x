@@ -6,7 +6,7 @@ using Dino.Entities;
 namespace Dino.Plugins.Omemo {
 
 public class Database : Qlite.Database {
-    private const int VERSION = 5;
+    private const int VERSION = 6;
 
     public class IdentityMetaTable : Table {
         //Default to provide backwards compatability
@@ -14,6 +14,10 @@ public class Database : Qlite.Database {
         public Column<string> address_name = new Column.Text("address_name") { not_null = true };
         public Column<int> device_id = new Column.Integer("device_id") { not_null = true };
         public Column<string?> identity_key_public_base64 = new Column.Text("identity_key_public_base64");
+        // A bundle with a different identity key is never applied automatically
+        // (that would silently re-key the device). It is parked here until the
+        // user explicitly accepts it.
+        public Column<string?> pending_identity_key_public_base64 = new Column.Text("pending_identity_key_public_base64") { min_version = 6 };
         public Column<bool> trusted_identity = new Column.BoolInt("trusted_identity") { default = "0", max_version = 1 };
         public Column<int> trust_level = new Column.Integer("trust_level") { default = TrustLevel.UNKNOWN.to_string(), min_version = 2 };
         public Column<bool> now_active = new Column.BoolInt("now_active") { default = "1" };
@@ -23,7 +27,7 @@ public class Database : Qlite.Database {
 
         internal IdentityMetaTable(Database db) {
             base(db, "identity_meta");
-            init({identity_id, address_name, device_id, identity_key_public_base64, trusted_identity, trust_level, now_active, last_active, last_message_untrusted, last_message_undecryptable});
+            init({identity_id, address_name, device_id, identity_key_public_base64, pending_identity_key_public_base64, trusted_identity, trust_level, now_active, last_active, last_message_untrusted, last_message_undecryptable});
             index("identity_meta_idx", {identity_id, address_name, device_id}, true);
             index("identity_meta_list_idx", {identity_id, address_name});
         }
@@ -56,28 +60,36 @@ public class Database : Qlite.Database {
             RowOption row = with_address(identity_id, address_name).with(this.device_id, "=", device_id).single().row();
             if (row.is_present() && row[identity_key_public_base64] != null && row[identity_key_public_base64] != identity_key) {
                 critical("Tried to change the identity key for a known device id. Likely an attack.");
+                set_pending_identity_key(identity_id, address_name, device_id, identity_key);
                 return -1;
             }
-            return upsert()
+            int64 result = upsert()
                     .value(this.identity_id, identity_id, true)
                     .value(this.address_name, address_name, true)
                     .value(this.device_id, device_id, true)
                     .value(this.identity_key_public_base64, identity_key)
                     .value(this.trust_level, trust).perform();
+            // The bundle matches the stored key again: a previously refused key
+            // is moot and must not keep the device blocked.
+            clear_pending_identity_key(identity_id, address_name, device_id);
+            return result;
         }
 
         public int64 insert_device_session(int32 identity_id, string address_name, int device_id, string identity_key, TrustLevel trust) {
             RowOption row = with_address(identity_id, address_name).with(this.device_id, "=", device_id).single().row();
             if (row.is_present() && row[identity_key_public_base64] != null && row[identity_key_public_base64] != identity_key) {
                 critical("Tried to change the identity key for a known device id. Likely an attack.");
+                set_pending_identity_key(identity_id, address_name, device_id, identity_key);
                 return -1;
             }
-            return upsert()
+            int64 result = upsert()
                     .value(this.identity_id, identity_id, true)
                     .value(this.address_name, address_name, true)
                     .value(this.device_id, device_id, true)
                     .value(this.identity_key_public_base64, identity_key)
                     .value(this.trust_level, trust).perform();
+            clear_pending_identity_key(identity_id, address_name, device_id);
+            return result;
         }
 
         public void update_last_message_untrusted(int identity_id, int device_id, DateTime? time) {
@@ -107,13 +119,19 @@ public class Database : Qlite.Database {
         public QueryBuilder get_trusted_devices(int identity_id, string address_name) {
             return this.with_address(identity_id, address_name)
                 .with(this.trust_level, "!=", TrustLevel.UNTRUSTED)
-                .with(this.now_active, "=", true);
+                .with(this.now_active, "=", true)
+                // A device with a pending identity key change must not be
+                // encrypted to until the user accepted the new key.
+                .with_null(this.pending_identity_key_public_base64)
+                .with(this.device_id, ">", 0);
         }
 
         public QueryBuilder get_known_devices(int identity_id, string address_name) {
             return this.with_address(identity_id, address_name)
                 .with(this.trust_level, "!=", TrustLevel.UNKNOWN)
-                .without_null(this.identity_key_public_base64);
+                .without_null(this.identity_key_public_base64)
+                // Changed keys are shown by the dedicated pending row only.
+                .with_null(this.pending_identity_key_public_base64);
         }
 
         public QueryBuilder get_unknown_devices(int identity_id, string address_name) {
@@ -124,7 +142,47 @@ public class Database : Qlite.Database {
         public QueryBuilder get_new_devices(int identity_id, string address_name) {
             return this.with_address(identity_id, address_name)
                 .with(this.trust_level, "=", TrustLevel.UNKNOWN)
-                .without_null(this.identity_key_public_base64);
+                .without_null(this.identity_key_public_base64)
+                // Changed keys are handled explicitly, never by auto-accept.
+                .with_null(this.pending_identity_key_public_base64);
+        }
+
+        public QueryBuilder get_pending_identity_keys(int identity_id, string address_name) {
+            return this.with_address(identity_id, address_name)
+                .without_null(this.pending_identity_key_public_base64);
+        }
+
+        public void set_pending_identity_key(int32 identity_id, string address_name, int device_id, string identity_key) {
+            update()
+                .with(this.identity_id, "=", identity_id)
+                .with(this.address_name, "=", address_name)
+                .with(this.device_id, "=", device_id)
+                .set(this.pending_identity_key_public_base64, identity_key)
+                .set(this.trust_level, TrustLevel.UNKNOWN)
+                .perform();
+        }
+
+        public void clear_pending_identity_key(int32 identity_id, string address_name, int device_id) {
+            update()
+                .with(this.identity_id, "=", identity_id)
+                .with(this.address_name, "=", address_name)
+                .with(this.device_id, "=", device_id)
+                .set_null(this.pending_identity_key_public_base64)
+                .perform();
+        }
+
+        public bool accept_pending_identity_key(int32 identity_id, string address_name, int device_id) {
+            var row = get_device(identity_id, address_name, device_id);
+            if (row == null || row[pending_identity_key_public_base64] == null) return false;
+            update()
+                .with(this.identity_id, "=", identity_id)
+                .with(this.address_name, "=", address_name)
+                .with(this.device_id, "=", device_id)
+                .set(this.identity_key_public_base64, row[pending_identity_key_public_base64])
+                .set(this.trust_level, TrustLevel.TRUSTED)
+                .set_null(this.pending_identity_key_public_base64)
+                .perform();
+            return true;
         }
 
         public Row? get_device(int identity_id, string address_name, int device_id) {

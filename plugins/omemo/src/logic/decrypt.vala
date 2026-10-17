@@ -157,7 +157,7 @@ namespace Dino.Plugins.Omemo {
             uint8[] ciphertext = data.ciphertext;
             uint8[] encrypted_key = data.encrypted_key;
 
-            Address address = new Address(from_jid.to_string(), sid);
+            Address address = new Address(from_jid.bare_jid.to_string(), sid);
             uint8[] key;
 
             if (data.is_prekey) {
@@ -198,7 +198,7 @@ namespace Dino.Plugins.Omemo {
         }
 
         private bool update_db_for_prekey(int identity_id, string identity_key, Jid from_jid, int sid) {
-            Row? device = db.identity_meta.get_device(identity_id, from_jid.to_string(), sid);
+            Row? device = db.identity_meta.get_device(identity_id, from_jid.bare_jid.to_string(), sid);
             if (device != null && device[db.identity_meta.identity_key_public_base64] != null) {
                 if (device[db.identity_meta.identity_key_public_base64] != identity_key) {
                     critical("Tried to use a different identity key for a known device id.");
@@ -206,8 +206,8 @@ namespace Dino.Plugins.Omemo {
                 }
             } else {
                 debug("Learn new device from incoming message from %s/%d", from_jid.to_string(), sid);
-                bool blind_trust = db.trust.get_blind_trust(identity_id, from_jid.to_string(), true);
-                if (db.identity_meta.insert_device_session(identity_id, from_jid.to_string(), sid, identity_key, blind_trust ? TrustLevel.TRUSTED : TrustLevel.UNKNOWN) < 0) {
+                bool blind_trust = db.trust.get_blind_trust(identity_id, from_jid.bare_jid.to_string(), true);
+                if (db.identity_meta.insert_device_session(identity_id, from_jid.bare_jid.to_string(), sid, identity_key, blind_trust ? TrustLevel.TRUSTED : TrustLevel.UNKNOWN) < 0) {
                     critical("Failed learning a device.");
                     return false;
                 }

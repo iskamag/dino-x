@@ -47,7 +47,7 @@ public class BadMessagesPopulator : Plugins.ConversationItemPopulator, Plugins.C
 
         switch (current_conversation.type_) {
             case Conversation.Type.CHAT:
-                qry.with(db.identity_meta.address_name, "=", current_conversation.counterpart.to_string());
+                qry.with(db.identity_meta.address_name, "=", current_conversation.counterpart.bare_jid.to_string());
                 break;
             case Conversation.Type.GROUPCHAT:
                 bool is_private = stream_interactor.get_module(MucManager.IDENTITY).is_private_room(current_conversation.account, current_conversation.counterpart);
@@ -64,7 +64,7 @@ public class BadMessagesPopulator : Plugins.ConversationItemPopulator, Plugins.C
                     } else {
                         selection.append(@" OR $(db.identity_meta.address_name) = ?");
                     }
-                    selection_args += jid.to_string();
+                    selection_args += jid.bare_jid.to_string();
                 }
                 selection.append(")");
                 qry.where(selection.str, selection_args);
@@ -152,7 +152,7 @@ public class BadMessagesWidget : Box {
         if (conversation.type_ == Conversation.Type.CHAT) {
             who = Dino.get_participant_display_name(plugin.app.stream_interactor, conversation, jid);
         } else if (conversation.type_ == Conversation.Type.GROUPCHAT) {
-            who = jid.to_string();
+            who = jid.bare_jid.to_string();
             // `jid` is a real JID. In MUCs, try to show nicks instead (given that the JID is currently online)
             var occupants = plugin.app.stream_interactor.get_module(MucManager.IDENTITY).get_occupants(conversation.counterpart, conversation.account);
             if (occupants == null) return;

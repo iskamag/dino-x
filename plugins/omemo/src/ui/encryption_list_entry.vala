@@ -59,17 +59,28 @@ public class EncryptionListEntry : Plugins.EncryptionListEntry, Object {
                 return;
             }
             foreach (Jid offline_member in offline_members) {
-                bool ok = yield omemo_manager.ensure_get_keys_for_jid(conversation.account, offline_member);
-                if (!ok) {
+                KeyFetchResult result = yield omemo_manager.ensure_get_keys_for_jid(conversation.account, offline_member);
+                if (result == KeyFetchResult.UNSUPPORTED) {
                     input_status_callback(new Plugins.InputFieldStatus("A member does not support OMEMO: %s".printf(offline_member.to_string()), Plugins.InputFieldStatus.MessageType.ERROR, Plugins.InputFieldStatus.InputState.NO_SEND));
+                    return;
+                } else if (result == KeyFetchResult.NO_TRUSTED_DEVICE) {
+                    input_status_callback(new Plugins.InputFieldStatus("There is no accepted OMEMO device for %s. Review the keys in the contact details.".printf(offline_member.to_string()), Plugins.InputFieldStatus.MessageType.ERROR, Plugins.InputFieldStatus.InputState.NO_SEND));
+                    return;
+                } else if (result == KeyFetchResult.FAILED) {
+                    input_status_callback(new Plugins.InputFieldStatus("Could not load the OMEMO keys of %s yet. Messages will be sent once the keys are available.".printf(offline_member.to_string()), Plugins.InputFieldStatus.MessageType.WARNING, Plugins.InputFieldStatus.InputState.NORMAL));
                     return;
                 }
             }
             return;
         }
 
-        if (!(yield omemo_manager.ensure_get_keys_for_jid(conversation.account, conversation.counterpart.bare_jid))) {
+        KeyFetchResult result = yield omemo_manager.ensure_get_keys_for_jid(conversation.account, conversation.counterpart.bare_jid);
+        if (result == KeyFetchResult.UNSUPPORTED) {
             input_status_callback(new Plugins.InputFieldStatus("This contact does not support %s encryption".printf("OMEMO"), Plugins.InputFieldStatus.MessageType.ERROR, Plugins.InputFieldStatus.InputState.NO_SEND));
+        } else if (result == KeyFetchResult.NO_TRUSTED_DEVICE) {
+            input_status_callback(new Plugins.InputFieldStatus("There is no accepted OMEMO device for this contact. Review the keys in the contact details.", Plugins.InputFieldStatus.MessageType.ERROR, Plugins.InputFieldStatus.InputState.NO_SEND));
+        } else if (result == KeyFetchResult.FAILED) {
+            input_status_callback(new Plugins.InputFieldStatus("Could not load this contact's OMEMO keys yet. Your message will be sent once they are available.", Plugins.InputFieldStatus.MessageType.WARNING, Plugins.InputFieldStatus.InputState.NORMAL));
         }
     }
 
