@@ -37,10 +37,11 @@ public class Dino.CallState : Object {
 
         if (call.direction == Call.DIRECTION_OUTGOING && call.state != Call.State.OTHER_DEVICE) {
             accepted = true;
-
+        }
+        if (call.state != Call.State.OTHER_DEVICE) {
             Timeout.add_seconds(30, () => {
-                if (this == null) return false; // TODO enough?
-                if (call.state == Call.State.ESTABLISHING) {
+                if (call.state == Call.State.ESTABLISHING ||
+                        (call.direction == Call.DIRECTION_INCOMING && call.state == Call.State.RINGING)) {
                     call.state = Call.State.MISSED;
                     terminated(call.account.bare_jid, null, null);
                 }
@@ -99,7 +100,12 @@ public class Dino.CallState : Object {
         call.state = Call.State.ESTABLISHING;
 
         XmppStream stream = stream_interactor.get_stream(call.account);
-        if (stream == null) return;
+        if (stream == null) {
+            call.state = Call.State.FAILED;
+            call.end_time = new DateTime.now_utc();
+            terminated(call.account.bare_jid, null, null);
+            return;
+        }
 
         if (use_cim) {
             if (invited_to_group_call != null) {
@@ -126,10 +132,10 @@ public class Dino.CallState : Object {
 
         if (use_cim) {
             XmppStream stream = stream_interactor.get_stream(call.account);
-            if (stream == null) return;
-
-            foreach (Jid jid_to_inform in cim_jids_to_inform) {
-                stream.get_module(Xep.CallInvites.Module.IDENTITY).send_reject(stream, jid_to_inform, cim_call_id, cim_message_type);
+            if (stream != null) {
+                foreach (Jid jid_to_inform in cim_jids_to_inform) {
+                    stream.get_module(Xep.CallInvites.Module.IDENTITY).send_reject(stream, jid_to_inform, cim_call_id, cim_message_type);
+                }
             }
         }
         var peers_cpy = new ArrayList<PeerState>();
