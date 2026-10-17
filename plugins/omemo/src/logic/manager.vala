@@ -288,6 +288,8 @@ public class Manager : StreamInteractionModule, Object {
         //Update the database with the appropriate trust information
         if (db.identity_meta.insert_device_bundle(identity_id, jid.bare_jid.to_string(), device_id, bundle, trusted) < 0) {
             critical("Refusing to start a session for %s/%d: identity key changed", jid.bare_jid.to_string(), device_id);
+            // Keep the old key and leave the device blocked; replacing it needs
+            // an explicit re-verification flow, not silent acceptance.
             db.identity_meta.update()
                 .with(db.identity_meta.identity_id, "=", identity_id)
                 .with(db.identity_meta.address_name, "=", jid.bare_jid.to_string())
