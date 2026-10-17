@@ -23,7 +23,8 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
     private Gst.Element input;
     private Gst.Pad input_pad;
     private Gst.Element output;
-    private Gst.Element session;
+    private Gst.Element? session = null;
+    private uint remb_timeout_id = 0;
 
     private Device _input_device;
     public Device input_device { get { return _input_device; } set {
@@ -169,7 +170,7 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
             if (internal_session != null) {
                 internal_session.connect("signal::on-feedback-rtcp", on_feedback_rtcp, this);
             }
-            Timeout.add(1000, () => remb_adjust());
+            remb_timeout_id = Timeout.add(1000, () => remb_adjust());
         }
         if (input_device != null && media == "video") {
             input_device.update_bitrate(payload_type, target_send_bitrate);
@@ -470,6 +471,12 @@ public class Dino.Plugins.Rtp.Stream : Xmpp.Xep.JingleRtp.Stream {
     }
 
     public override void destroy() {
+        if (remb_timeout_id != 0) {
+            Source.remove(remb_timeout_id);
+            remb_timeout_id = 0;
+        }
+        session = null;
+
         // Stop network communication
         push_recv_data = false;
         if (recv_rtp != null) recv_rtp.end_of_stream();
