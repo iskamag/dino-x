@@ -52,12 +52,25 @@ namespace Xmpp.Iq {
         }
 
         public delegate void OnResult(XmppStream stream, Iq.Stanza iq);
-        public void send_iq(XmppStream stream, Iq.Stanza iq, owned OnResult? listener = null, int io_priority = Priority.DEFAULT) {
+
+        // Returns a future for the write, not for the IQ response. Callers that
+        // need the response keep using the listener or send_iq_async().
+        public Gee.Future<void*> send_iq(XmppStream stream, Iq.Stanza iq, owned OnResult? listener = null, int io_priority = Priority.DEFAULT) {
             preprocess_outgoing_iq_set_get(stream, iq);
-            stream.write(iq.stanza, io_priority);
+            var promise = new Promise<void*>();
             if (listener != null) {
                 responseListeners[iq.id] = new ResponseListener((owned) listener);
             }
+            stream.write_async.begin(iq.stanza, io_priority, null, (obj, res) => {
+                try {
+                    stream.write_async.end(res);
+                    promise.set_value(null);
+                } catch (IOError e) {
+                    responseListeners.unset(iq.id);
+                    promise.set_exception((owned) e);
+                }
+            });
+            return promise.future;
         }
 
         public void register_for_namespace(string namespace, Handler module) {
