@@ -150,7 +150,7 @@ public class FileManager : StreamInteractionModule, Object {
             }
 
             if (file_encryptor != null) {
-                file_meta = file_encryptor.encrypt_file(conversation, file_transfer);
+                file_meta = yield file_encryptor.encrypt_file(conversation, file_transfer);
             }
 
             FileSendData file_send_data = yield file_sender.prepare_send_file(conversation, file_transfer, file_meta);
@@ -551,7 +551,7 @@ public interface FileSender : Object {
 
 public interface FileEncryptor : Object {
     public abstract bool can_encrypt_file(Conversation conversation, FileTransfer file_transfer);
-    public abstract FileMeta encrypt_file(Conversation conversation, FileTransfer file_transfer) throws FileSendError;
+    public abstract async FileMeta encrypt_file(Conversation conversation, FileTransfer file_transfer) throws FileSendError;
     public abstract FileSendData? preprocess_send_file(Conversation conversation, FileTransfer file_transfer, FileSendData file_send_data, FileMeta file_meta) throws FileSendError;
 }
 

@@ -3,6 +3,9 @@ using GPG;
 
 namespace GPGHelper {
 
+[CCode (cname = "g_file_descriptor_based_get_fd")]
+private extern static int get_file_descriptor(void* stream);
+
 private static bool initialized = false;
 
 public static string encrypt_armor(string plain, Key[] keys, EncryptFlags flags) throws GLib.Error {
@@ -14,6 +17,51 @@ public static string encrypt_armor(string plain, Key[] keys, EncryptFlags flags)
         context.set_armor(true);
         Data enc_data = context.op_encrypt(keys, flags, plain_data);
         return get_string_from_data(enc_data);
+    } finally {
+        global_mutex.unlock();
+    }
+}
+
+public static int64 encrypt_file_to_file(string input_path, string output_path, Key[] keys, EncryptFlags flags, string file_name) throws GLib.Error {
+    global_mutex.lock();
+    try {
+        initialize();
+        Data plain_data = Data.create_from_file(input_path);
+        plain_data.set_file_name(file_name);
+        Context context = Context.create();
+        context.set_armor(true);
+        var output = File.new_for_path(output_path).replace(null, false, FileCreateFlags.REPLACE_DESTINATION, null);
+        try {
+            Data enc_data = Data.create_from_fd(get_file_descriptor(output));
+            context.op_encrypt_(keys, flags, plain_data, enc_data);
+        } finally {
+            try {
+                output.close(null);
+            } catch (Error close_error) { }
+        }
+        return File.new_for_path(output_path).query_info("standard::size", FileQueryInfoFlags.NONE, null).get_size();
+    } finally {
+        global_mutex.unlock();
+    }
+}
+
+public static string? decrypt_file_to_file(string input_path, string output_path) throws GLib.Error {
+    global_mutex.lock();
+    try {
+        initialize();
+        Data enc_data = Data.create_from_file(input_path);
+        Context context = Context.create();
+        var output = File.new_for_path(output_path).replace(null, false, FileCreateFlags.REPLACE_DESTINATION, null);
+        try {
+            Data dec_data = Data.create_from_fd(get_file_descriptor(output));
+            context.op_decrypt_(enc_data, dec_data);
+        } finally {
+            try {
+                output.close(null);
+            } catch (Error close_error) { }
+        }
+        DecryptResult* dec_res = context.op_decrypt_result();
+        return dec_res != null && dec_res->file_name != null ? GLib.strdup(dec_res->file_name) : null;
     } finally {
         global_mutex.unlock();
     }

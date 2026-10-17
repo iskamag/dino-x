@@ -47,4 +47,12 @@ dep_openpgp = declare_dependency(link_with: lib_openpgp, include_directories: in
 exe_openpgp_database_test = executable('openpgp-database-test', files('tests/database.vala', 'src/database.vala'),
     dependencies: [dep_dino, dep_gee, dep_gio, dep_glib, dep_qlite, dep_xmpp_vala], install: false)
 test('OpenPGP database', exe_openpgp_database_test)
+exe_openpgp_file_test = executable('openpgp-file-test',
+    files('tests/file_crypto.vala', 'src/gpgme_helper.vala', 'src/file_transfer/file_decryptor.vala', 'src/gpgme_fix.c', 'vapi/gpg-error.vapi'),
+    dependencies: [dep_dino, dep_gee, dep_gio, dep_glib, dep_gpgme, dep_qlite, dep_xmpp_vala],
+    vala_args: ['--vapidir', meson.current_source_dir() / 'vapi'],
+    include_directories: include_directories('src'),
+    c_args: c_args,
+    install: false)
+test('OpenPGP file crypto', exe_openpgp_file_test)
 summary('End-to-end encryption using PGP (openpgp)', dep_openpgp.found(), bool_yn: true, section: 'Plugins')

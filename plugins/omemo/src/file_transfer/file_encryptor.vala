@@ -19,7 +19,7 @@ public class OmemoFileEncryptor : Dino.FileEncryptor, Object {
         return file_transfer.encryption == Encryption.OMEMO;
     }
 
-    public FileMeta encrypt_file(Conversation conversation, FileTransfer file_transfer) throws FileSendError {
+    public async FileMeta encrypt_file(Conversation conversation, FileTransfer file_transfer) throws FileSendError {
         const uint KEY_SIZE = 32;
         const uint IV_SIZE = 12;
         var omemo_http_file_meta = new OmemoHttpFileMeta();

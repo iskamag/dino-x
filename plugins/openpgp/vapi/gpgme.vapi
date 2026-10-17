@@ -616,6 +616,15 @@ namespace GPG {
         [CCode (cname = "gpgme_data_new_from_file")]
         public static GPGError.Error new_from_file(out Data d, string filename, int copy = 1);
 
+        [CCode (cname = "gpgme_data_new_from_fd")]
+        public static GPGError.Error new_from_fd(out Data d, int fd);
+
+        public static Data create_from_fd(int fd) throws GLib.Error {
+            Data data;
+            throw_if_error(new_from_fd(out data, fd));
+            return data;
+        }
+
         public static Data create_from_file(string filename, int copy = 1) throws GLib.Error {
             Data data;
             throw_if_error(new_from_file(out data, filename, copy));
