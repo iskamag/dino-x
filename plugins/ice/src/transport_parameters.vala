@@ -8,6 +8,7 @@ public class Dino.Plugins.Ice.TransportParameters : JingleIceUdp.IceUdpTransport
     private uint stream_id;
     private bool we_want_connection;
     private bool remote_credentials_set;
+    private HashMap<uint8, int> sent_remote_candidate_counts = new HashMap<uint8, int>();
     private Map<uint8, DatagramConnection> connections = new HashMap<uint8, DatagramConnection>();
     private DtlsSrtp.Handler? dtls_srtp_handler;
     private MainContext thread_context;
@@ -164,6 +165,20 @@ public class Dino.Plugins.Ice.TransportParameters : JingleIceUdp.IceUdpTransport
         return a1.length == a2.length && Memory.cmp(a1, a2, a1.length) == 0;
     }
 
+    private SList<Nice.Candidate> get_unsent_remote_candidates(uint8 component, bool skip_link_local) {
+        int sent = sent_remote_candidate_counts[component];
+        int index = 0;
+        SList<Nice.Candidate> candidates = new SList<Nice.Candidate>();
+        foreach (JingleIceUdp.Candidate candidate in remote_candidates) {
+            if (candidate.component != component) continue;
+            if (index++ < sent) continue;
+            if (skip_link_local && candidate.ip.has_prefix("fe80::")) continue;
+            candidates.append(candidate_to_nice(candidate));
+        }
+        sent_remote_candidate_counts[component] = index;
+        return candidates;
+    }
+
     public override void handle_transport_accept(StanzaNode transport) throws Jingle.IqError {
         debug("on_transport_accept from %s", peer_full_jid.to_string());
         base.handle_transport_accept(transport);
@@ -218,12 +233,8 @@ public class Dino.Plugins.Ice.TransportParameters : JingleIceUdp.IceUdpTransport
             remote_credentials_set = true;
         }
         for (uint8 i = 1; i <= components; i++) {
-            SList<Nice.Candidate> candidates = new SList<Nice.Candidate>();
-            foreach (JingleIceUdp.Candidate candidate in remote_candidates) {
-                if (candidate.component == i) {
-                    candidates.append(candidate_to_nice(candidate));
-                }
-            }
+            SList<Nice.Candidate> candidates = get_unsent_remote_candidates(i, false);
+            if (candidates.length() == 0) continue;
             int new_candidates = agent.set_remote_candidates(stream_id, i, candidates);
             debug("Updated to %i remote candidates for candidate %u via transport info", new_candidates, i);
         }
@@ -243,15 +254,11 @@ public class Dino.Plugins.Ice.TransportParameters : JingleIceUdp.IceUdpTransport
             remote_credentials_set = true;
         }
         for (uint8 i = 1; i <= components; i++) {
-            SList<Nice.Candidate> candidates = new SList<Nice.Candidate>();
-            foreach (JingleIceUdp.Candidate candidate in remote_candidates) {
-                if (candidate.ip.has_prefix("fe80::")) continue;
-                if (candidate.component == i) {
-                    candidates.append(candidate_to_nice(candidate));
-                    debug("remote candidate: %s", agent.generate_local_candidate_sdp(candidate_to_nice(candidate)));
-                }
+            SList<Nice.Candidate> candidates = get_unsent_remote_candidates(i, true);
+            foreach (unowned Nice.Candidate candidate in candidates) {
+                debug("remote candidate: %s", agent.generate_local_candidate_sdp(candidate));
             }
-            int new_candidates = agent.set_remote_candidates(stream_id, i, candidates);
+            int new_candidates = candidates.length() > 0 ? agent.set_remote_candidates(stream_id, i, candidates) : 0;
             debug("Initiated component %u with %i remote candidates", i, new_candidates);
 
             connections[i] = new DatagramConnection(agent, dtls_srtp_handler, stream_id, i);

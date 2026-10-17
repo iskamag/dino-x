@@ -13,6 +13,10 @@ public abstract class Xmpp.Xep.JingleIceUdp.IceUdpTransportParameters : Jingle.T
     public ConcurrentList<Candidate> unsent_local_candidates = new ConcurrentList<Candidate>(Candidate.equals_func);
     public Gee.List<Candidate> remote_candidates = new ArrayList<Candidate>(Candidate.equals_func);
 
+    private void add_remote_candidate(Candidate candidate) {
+        if (!remote_candidates.contains(candidate)) remote_candidates.add(candidate);
+    }
+
     public uint8[]? own_fingerprint = null;
     public string? own_setup = null;
     public uint8[]? peer_fingerprint = null;
@@ -39,7 +43,7 @@ public abstract class Xmpp.Xep.JingleIceUdp.IceUdpTransportParameters : Jingle.T
             remote_pwd = node.get_attribute("pwd");
             remote_ufrag = node.get_attribute("ufrag");
             foreach (StanzaNode candidateNode in node.get_subnodes("candidate")) {
-                remote_candidates.add(Candidate.parse(candidateNode));
+                add_remote_candidate(Candidate.parse(candidateNode));
             }
 
             StanzaNode? fingerprint_node = node.get_subnode("fingerprint", DTLS_NS_URI);
@@ -100,7 +104,7 @@ public abstract class Xmpp.Xep.JingleIceUdp.IceUdpTransportParameters : Jingle.T
         if (pwd != null) remote_pwd = pwd;
         if (ufrag != null) remote_ufrag = ufrag;
         foreach (StanzaNode candidateNode in node.get_subnodes("candidate")) {
-            remote_candidates.add(Candidate.parse(candidateNode));
+            add_remote_candidate(Candidate.parse(candidateNode));
         }
 
         StanzaNode? fingerprint_node = node.get_subnode("fingerprint", DTLS_NS_URI);
@@ -117,7 +121,7 @@ public abstract class Xmpp.Xep.JingleIceUdp.IceUdpTransportParameters : Jingle.T
         if (pwd != null) remote_pwd = pwd;
         if (ufrag != null) remote_ufrag = ufrag;
         foreach (StanzaNode candidateNode in node.get_subnodes("candidate")) {
-            remote_candidates.add(Candidate.parse(candidateNode));
+            add_remote_candidate(Candidate.parse(candidateNode));
         }
 
         StanzaNode? fingerprint_node = node.get_subnode("fingerprint", DTLS_NS_URI);
