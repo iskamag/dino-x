@@ -141,7 +141,14 @@ public class StanzaReader {
         if (entry.ns_uri != null) return;
         if (entry.name.contains(":")) {
             var split = entry.name.split(":");
-            entry.ns_uri = ns_state.find_uri(split[0]);
+            try {
+                entry.ns_uri = ns_state.find_uri(split[0]);
+            } catch (IOError e) {
+                // Unknown prefixes are kept as opaque, unbound elements instead of
+                // failing the stream.
+                info("Unknown XML prefix %s, treating element as opaque", split[0]);
+                entry.ns_uri = "";
+            }
             entry.name = split[1];
         } else {
             entry.ns_uri = default_uri;
@@ -227,8 +234,8 @@ public class StanzaReader {
     }
 
     public async StanzaNode read_stanza_node() throws IOError {
+        ns_state = ns_state.push();
         try {
-            ns_state = ns_state.push();
             var res = yield read_node_start();
             if (res.has_nodes) {
                 bool finish_node_seen = false;
@@ -243,7 +250,13 @@ public class StanzaReader {
                             skip_single();
                             if (desc.contains(":")) {
                                 var split = desc.split(":");
-                                if (split[0] != ns_state.find_name((!)res.ns_uri)) throw new IOError.INVALID_DATA("XML: Closing namespace prefix mismatch");
+                                string? expected_prefix = null;
+                                try {
+                                    expected_prefix = ns_state.find_name((!)res.ns_uri);
+                                } catch (IOError e) {
+                                    // Opaque element with an unknown prefix.
+                                }
+                                if (expected_prefix != null && split[0] != expected_prefix) throw new IOError.INVALID_DATA("XML: Closing namespace prefix mismatch");
                                 if (split[1] != res.name) throw new IOError.INVALID_DATA("XML: Closing element name mismatch");
                             } else {
                                 if (ns_state.current_ns_uri != res.ns_uri) throw new IOError.INVALID_DATA("XML: Closing element namespace mismatch");
@@ -263,13 +276,14 @@ public class StanzaReader {
                     }
                 }
             }
-            ns_state = ns_state.pop();
             return res;
         } catch (IOError.INVALID_DATA e) {
             uint8[] buffer_cpy = new uint8[buffer.length + 1];
             Memory.copy(buffer_cpy, buffer, buffer.length);
             warning("invalid data at: %s".printf((string)buffer_cpy) + "\n");
             throw e;
+        } finally {
+            ns_state = ns_state.pop();
         }
     }
 

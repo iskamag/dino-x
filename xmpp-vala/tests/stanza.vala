@@ -9,6 +9,7 @@ class StanzaTest : Gee.TestCase {
         add_async_test("ack_stream", (cb) => { test_ack_stream.begin(cb); });
         add_test("get_attribute_(u)int", test_get_attribute_int);
         add_test("test_encoded_val", test_encoded_val);
+        add_async_test("unknown_prefix_is_opaque", (cb) => { test_unknown_prefix.begin(cb); });
     }
 
     private async void test_node_one(Gee.TestFinishedCallback cb) {
@@ -72,6 +73,25 @@ class StanzaTest : Gee.TestCase {
         } catch (Error e) {
             fail_if_reached("Unexpected error");
         }
+    }
+
+    private async void test_unknown_prefix(Gee.TestFinishedCallback cb) {
+        var xml = """
+        <message xmlns='jabber:client'><foo:bar>hello</foo:bar></message>
+        <message xmlns='jabber:client'><body>ok</body></message>
+        """;
+        var reader = new StanzaReader.for_string(xml);
+        var first = yield reader.read_node();
+        fail_if_not_eq_str(first.name, "message");
+        StanzaNode? opaque = first.get_subnode("bar", "");
+        if (fail_if(opaque == null)) { cb(); return; }
+        fail_if_not_eq_str(opaque.ns_uri, "");
+
+        var second = yield reader.read_node();
+        StanzaNode? body = second.get_subnode("body");
+        if (fail_if(body == null)) { cb(); return; }
+        fail_if_not_eq_str(body.get_string_content(), "ok");
+        cb();
     }
 
     private async void test_ack_stream(Gee.TestFinishedCallback cb) {
