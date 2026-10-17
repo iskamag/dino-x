@@ -76,8 +76,8 @@ public class ContentItemStore : StreamInteractionModule, Object {
         var file_storage = stream_interactor.get_module(FileTransferStorage.IDENTITY);
         var messages = message_storage.get_messages_by_ids(message_ids, conversation);
         var files = file_storage.get_files_by_ids(file_ids, conversation);
-        var calls = stream_interactor.get_module(CallStore.IDENTITY).get_calls_by_ids(call_ids, conversation);
-        var file_groups = file_storage.get_file_groups_by_ids(file_group_ids, conversation);
+        stream_interactor.get_module(CallStore.IDENTITY).get_calls_by_ids(call_ids, conversation);
+        file_storage.get_file_groups_by_ids(file_group_ids, conversation);
 
         // File items can reference the message that carried them.
         var file_message_ids = new HashSet<int>();
@@ -98,48 +98,9 @@ public class ContentItemStore : StreamInteractionModule, Object {
 
         Gee.TreeSet<ContentItem> items = new Gee.TreeSet<ContentItem>(ContentItem.compare_func);
         foreach (ContentItemRow row in rows) {
-            ContentItem? content_item = null;
-            switch (row.content_type) {
-                case 1: {
-                    Message? message = messages[row.foreign_id];
-                    if (message != null) {
-                        var message_item = new MessageItem(message, conversation, row.id);
-                        message_item.time = row.time; // In case of message corrections, the original time should be used
-                        content_item = message_item;
-                    }
-                    break;
-                }
-                case 2: {
-                    FileTransfer? file_transfer = files[row.foreign_id];
-                    if (file_transfer != null) {
-                        Message? message = null;
-                        int file_message_id = -1;
-                        if ((file_transfer.provider == FileManager.HTTP_PROVIDER_ID || file_transfer.provider == FileManager.SFS_PROVIDER_ID)
-                                && file_transfer.info != null && int.try_parse(file_transfer.info, out file_message_id)) {
-                            message = messages[file_message_id];
-                        }
-                        content_item = new FileItem(file_transfer, conversation, row.id, message);
-                    }
-                    break;
-                }
-                case 3: {
-                    Call? call = calls[row.foreign_id];
-                    if (call != null) {
-                        content_item = new CallItem(call, conversation, row.id);
-                    }
-                    break;
-                }
-                case 4: {
-                    FileTransferGroup? file_group = file_groups[row.foreign_id];
-                    if (file_group != null) {
-                        content_item = new FileGroupItem(file_group, conversation, row.id);
-                    }
-                    break;
-                }
-                default:
-                    warning("Unknown content item type: %i", row.content_type);
-                    break;
-            }
+            // The batch loaders above populated the module caches, so this only
+            // takes the cached path.
+            ContentItem? content_item = get_item(conversation, row.id, row.content_type, row.foreign_id, row.time);
             if (content_item != null) {
                 items.add(content_item);
             } else {

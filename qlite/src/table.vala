@@ -1,3 +1,4 @@
+using Gee;
 using Sqlite;
 
 namespace Qlite {
@@ -128,6 +129,21 @@ public class Table {
         ensure_init();
         if (!column.unique && !column.primary_key) error("%s is not suited to identify a row, but used with row_with()", column.name);
         return select().with(column, "=", value).row();
+    }
+
+    public QueryBuilder select_by_ids(Column<int> id_column, Gee.Collection<int> ids) {
+        ensure_init();
+        QueryBuilder builder = select().from(this);
+        if (ids.is_empty) return builder.where("0");
+        var placeholders = new StringBuilder();
+        string[] args = new string[ids.size];
+        int i = 0;
+        foreach (int id in ids) {
+            if (i > 0) placeholders.append(",");
+            placeholders.append("?");
+            args[i++] = id.to_string();
+        }
+        return builder.where(@"$(id_column) IN ($(placeholders.str))", args);
     }
 
     public bool is_known_column(string column) {

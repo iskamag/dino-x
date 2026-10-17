@@ -53,25 +53,18 @@ namespace Dino {
 
         public HashMap<int, FileTransfer> get_files_by_ids(Gee.Collection<int> ids, Conversation? conversation) {
             var ret = new HashMap<int, FileTransfer>();
-            var missing = new ArrayList<int>();
+            var missing = new HashSet<int>();
             foreach (int id in ids) {
                 FileTransfer? cached = files_by_db_id[id];
                 if (cached != null) {
                     ret[id] = cached;
-                } else if (!missing.contains(id)) {
+                } else {
                     missing.add(id);
                 }
             }
             if (missing.is_empty) return ret;
 
-            var placeholders = new StringBuilder();
-            string[] args = new string[missing.size];
-            for (int i = 0; i < missing.size; i++) {
-                if (i > 0) placeholders.append(",");
-                placeholders.append("?");
-                args[i] = missing[i].to_string();
-            }
-            foreach (Row row in db.file_transfer.select().where(@"$(db.file_transfer.id) IN ($(placeholders.str))", args)) {
+            foreach (Row row in db.file_transfer.select_by_ids(db.file_transfer.id, missing)) {
                 FileTransfer? file_transfer = create_file_from_row_opt(new RowOption(row), conversation);
                 if (file_transfer != null) ret[file_transfer.id] = file_transfer;
             }
@@ -79,7 +72,8 @@ namespace Dino {
         }
 
         // Http file transfers store the corresponding message id in the `info` field
-        public FileTransfer? get_file_by_message_id(int id, Conversation conversation) {            FileTransfer? file_transfer = files_by_message_id[id];
+        public FileTransfer? get_file_by_message_id(int id, Conversation conversation) {
+            FileTransfer? file_transfer = files_by_message_id[id];
             if (file_transfer != null) {
                 return file_transfer;
             }
@@ -104,25 +98,18 @@ namespace Dino {
 
         public HashMap<int, FileTransferGroup> get_file_groups_by_ids(Gee.Collection<int> ids, Conversation conversation) {
             var ret = new HashMap<int, FileTransferGroup>();
-            var missing = new ArrayList<int>();
+            var missing = new HashSet<int>();
             foreach (int id in ids) {
                 FileTransferGroup? cached = file_group_by_db_id[id];
                 if (cached != null) {
                     ret[id] = cached;
-                } else if (!missing.contains(id)) {
+                } else {
                     missing.add(id);
                 }
             }
             if (missing.is_empty) return ret;
 
-            var placeholders = new StringBuilder();
-            string[] args = new string[missing.size];
-            for (int i = 0; i < missing.size; i++) {
-                if (i > 0) placeholders.append(",");
-                placeholders.append("?");
-                args[i] = missing[i].to_string();
-            }
-            foreach (Row row in db.file_transfer_group.select().where(@"$(db.file_transfer_group.id) IN ($(placeholders.str))", args)) {
+            foreach (Row row in db.file_transfer_group.select_by_ids(db.file_transfer_group.id, missing)) {
                 FileTransferGroup? file_group = create_file_group_from_row(row, conversation);
                 if (file_group != null) ret[file_group.id] = file_group;
             }

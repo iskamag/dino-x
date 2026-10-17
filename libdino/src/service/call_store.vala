@@ -43,25 +43,18 @@ namespace Dino {
 
         public HashMap<int, Call> get_calls_by_ids(Gee.Collection<int> ids, Conversation conversation) {
             var ret = new HashMap<int, Call>();
-            var missing = new ArrayList<int>();
+            var missing = new HashSet<int>();
             foreach (int id in ids) {
                 Call? cached = calls_by_db_id[id];
                 if (cached != null) {
                     ret[id] = cached;
-                } else if (!missing.contains(id)) {
+                } else {
                     missing.add(id);
                 }
             }
             if (missing.is_empty) return ret;
 
-            var placeholders = new StringBuilder();
-            string[] args = new string[missing.size];
-            for (int i = 0; i < missing.size; i++) {
-                if (i > 0) placeholders.append(",");
-                placeholders.append("?");
-                args[i] = missing[i].to_string();
-            }
-            foreach (Row row in db.call.select().where(@"$(db.call.id) IN ($(placeholders.str))", args)) {
+            foreach (Row row in db.call.select_by_ids(db.call.id, missing)) {
                 Call? call = create_call_from_row_opt(new RowOption(row), conversation);
                 if (call != null) ret[call.id] = call;
             }

@@ -4,21 +4,19 @@ using Sqlite;
 namespace Qlite {
 
 public class Row {
-    private string[] column_names;
-    private HashMap<string, int> column_indexes;
+    private RowLayout layout;
     private int[] column_types;
     private string?[] text_values;
     private long[] int_values;
     private double[] real_values;
 
-    internal Row(Statement stmt, string[] column_names, HashMap<string, int> column_indexes) {
-        this.column_names = column_names;
-        this.column_indexes = column_indexes;
-        column_types = new int[column_names.length];
-        text_values = new string?[column_names.length];
-        int_values = new long[column_names.length];
-        real_values = new double[column_names.length];
-        for (int i = 0; i < column_names.length; i++) {
+    internal Row(Statement stmt, RowLayout layout) {
+        this.layout = layout;
+        column_types = new int[layout.column_names.length];
+        text_values = new string?[layout.column_names.length];
+        int_values = new long[layout.column_names.length];
+        real_values = new double[layout.column_names.length];
+        for (int i = 0; i < layout.column_names.length; i++) {
             // SQLite column types are per row, not per statement.
             column_types[i] = stmt.column_type(i);
             switch (column_types[i]) {
@@ -41,7 +39,7 @@ public class Row {
 
     private int index_of(string field, string? table) {
         string name = table != null ? @"$table.$field" : field;
-        if (column_indexes.has_key(name)) return column_indexes[name];
+        if (layout.column_indexes.has_key(name)) return layout.column_indexes[name];
         return -1;
     }
 
@@ -75,17 +73,17 @@ public class Row {
 
     public string to_string() {
         string ret = "{";
-        for (int i = 0; i < column_names.length; i++) {
+        for (int i = 0; i < layout.column_names.length; i++) {
             if (ret.length > 1) ret += ", ";
             switch (column_types[i]) {
                 case TEXT:
-                    ret = @"$ret$(column_names[i]): \"$(text_values[i])\"";
+                    ret = @"$ret$(layout.column_names[i]): \"$(text_values[i])\"";
                     break;
                 case INTEGER:
-                    ret = @"$ret$(column_names[i]): $(int_values[i])";
+                    ret = @"$ret$(layout.column_names[i]): $(int_values[i])";
                     break;
                 case FLOAT:
-                    ret = @"$ret$(column_names[i]): $(real_values[i])";
+                    ret = @"$ret$(layout.column_names[i]): $(real_values[i])";
                     break;
             }
         }
@@ -93,11 +91,30 @@ public class Row {
     }
 }
 
+public class RowLayout : Object {
+    public string[] column_names { get; private set; }
+    public HashMap<string, int> column_indexes { get; private set; }
+
+    internal RowLayout(Statement stmt) {
+        string[] names = new string[stmt.column_count()];
+        var indexes = new HashMap<string, int>();
+        for (int i = 0; i < stmt.column_count(); i++) {
+            if (stmt.column_origin_name(i) != null) {
+                names[i] = @"$(stmt.column_table_name(i)).$(stmt.column_origin_name(i))";
+            } else {
+                names[i] = stmt.column_name(i);
+            }
+            indexes[names[i]] = i;
+        }
+        column_names = names;
+        column_indexes = indexes;
+    }
+}
+
 public class RowIterator {
     private Database db;
     private Statement stmt;
-    private string[]? column_names = null;
-    private HashMap<string, int>? column_indexes = null;
+    private RowLayout? layout = null;
 
     public RowIterator.from_query_builder(Database db, QueryBuilder query) {
         this.db = db;
@@ -123,21 +140,10 @@ public class RowIterator {
     }
 
     public Row get() {
-        if (column_names == null) {
-            string[] names = new string[stmt.column_count()];
-            var indexes = new HashMap<string, int>();
-            for (int i = 0; i < stmt.column_count(); i++) {
-                if (stmt.column_origin_name(i) != null) {
-                    names[i] = @"$(stmt.column_table_name(i)).$(stmt.column_origin_name(i))";
-                } else {
-                    names[i] = stmt.column_name(i);
-                }
-                indexes[names[i]] = i;
-            }
-            column_names = names;
-            column_indexes = indexes;
+        if (layout == null) {
+            layout = new RowLayout(stmt);
         }
-        return new Row(stmt, (!)column_names, (!)column_indexes);
+        return new Row(stmt, (!)layout);
     }
 
     public Row? get_next() {
