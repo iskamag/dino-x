@@ -115,7 +115,10 @@ namespace Xmpp.Xep.Omemo {
             }
             if (recipient == null || enc_res.unknown_devices.is_empty) return;
             var devices_by_jid = own ? own_unknown_devices : other_unknown_devices;
-            string key = recipient.to_string();
+            // Everything downstream (occupants, bundles, sessions, the
+            // database) is keyed by the bare JID; a full-JID recipient would
+            // otherwise put the waiter into a map that is never consumed.
+            string key = recipient.bare_jid.to_string();
             ArrayList<int32>? devices = devices_by_jid[key];
             if (devices == null) {
                 devices = new ArrayList<int32>();

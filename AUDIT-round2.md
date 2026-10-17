@@ -31,12 +31,16 @@ Legend: **V** = reproduced/verified at runtime, **T** = code trace only.
 | O9 | `fetch_bundles()` skips a device with an existing (possibly broken) session, so the waiter is never released | Medium | T | fixed |
 | O10 | `on_self_bundle_result` returns before clearing the in-flight marker if the OMEMO context is unavailable | Low | T | fixed |
 | O11 | Successful empty PEP result wipes the known device list | Medium | T | fixed (guarded by O2/O7) |
-| O12 | Bundle fetch failures retry with no backoff | Low | T | fixed |
+| O12 | A failed bundle fetch holds the whole message for minutes | High | T | fixed |
 | O13 | `on_device_list_loaded` early-returns without unblocking, and counters are decremented for unrelated messages | Low | T | fixed |
-| O14 | `message_states` is never pruned; locking is inconsistent | Low | T | partial |
+| O14 | `message_states` is never pruned; deleted messages can be re-sent later | Low | T | fixed (pending key / devicelist wait states are retained on purpose for revival; deleted messages and removed accounts are pruned) |
 | O15 | `encryptors[account]` may be null in `on_pre_message_send` | Low | T | fixed |
 | O16 | Remote crash: `int.parse` on bundle attributes and null `identity_key` dereference | High | T | fixed |
 | O17 | Stale IQ callbacks / invalid device ids can mutate state after a reconnect | Low | T | fixed |
+| O18 | Full-JID recipients leave the per-device waiter map keyed by a different JID than its consumers | High | T | fixed |
+| O19 | `WAIT` with a known own device list but zero usable own devices has no request/wake-up | Medium | T | fixed |
+| O20 | MUC/1:1 pending messages are not resumed on XEP-0198 resume | Medium | T | fixed |
+| O21 | Deleted pending messages could still be sent; body-hash key corruption | Medium | T | fixed |
 | I1 | Pre-send attachment preview uses `Gtk.Picture.file`; GTK 4.24 resolves GIF/WebP/BMP to a transparent `GtkSvg` placeholder | High | V | fixed |
 | I2 | Chat input preview does not apply EXIF orientation | Low | V | fixed |
 | I3 | `ImagePreview.decode_webp` passes destination offsets as source offsets to `composite()` | Medium | T | fixed |
@@ -151,15 +155,24 @@ session exists but encryption failed; see `MessageState` handling.
   valid ("contact removed all devices") but combined with O7 no keyless message
   is sent any more; the send is surfaced as `WONTSEND` instead of silently
   disappearing.
-- O12: bundle fetch failures are retried with a bounded delay instead of
-  immediately.
+- O12: a failed bundle fetch no longer releases the message after a 4/8/16/32/60 s
+  retry cycle. The device is ignored for the current send (one minute) and the
+  waiter continues immediately; the next attempt refetches it. A bundle that
+  is actually missing therefore costs one round trip, not minutes.
 - O13: `on_device_list_loaded` failure paths and counter handling.
-- O14: states are pruned on the send / won't-send transitions. A pending state
-  for a message deleted by the user can still linger until an event resolves
-  it; deleting a *pending encrypted* message is not a normal code path and a
-  dedicated signal hook was left out to avoid coupling OMEMO to the deletion
-  service.
+- O14: states are pruned on the send / won't-send transitions, on account
+  removal, and when the message is deleted (`MessageDeletion.item_deleted`).
+  States for a devicelist give-up or a pending identity key are retained on
+  purpose so the message can be revived when the list/key becomes available.
 - O15: guard the encryptor lookup.
+- O18: `EncryptState` now keys unknown devices by `recipient.bare_jid`, and the
+  session address uses the bare JID, matching every consumer.
+- O19: `SendPolicy` returns `WONT_SEND` once the own list is known but has no
+  usable device; a missing own list still waits (and is fetched).
+- O20: `stream_resumed` is hooked and pending key requests are revived; this
+  also covers MUC messages that `MessageProcessor` does not re-send on resume.
+- O21: `Message.hash_func` uses the stable stanza id instead of the mutable
+  body, and the deletion signal removes the pending state.
 
 ## O16. Bundle parsing could crash on hostile input
 
@@ -204,7 +217,35 @@ of GTK's file loader.
   a transparent thumbnail. Documented, not changed (would grow every file
   message). Animated GIF/WebP attachments now show their first frame in the
   preview (the same still-image policy the conversation view already uses)
-  instead of being blank.
+  instead of being blank. The preview is decoded at the current scale factor at
+  add time; a file restored before the window is mapped (rare) is decoded at
+  1x and only upscaled, it is not re-decoded on a later scale change.
+
+---
+
+## Review round (adversarial subagent pass)
+
+Two independent read-only reviewers audited the branch after the first
+implementation. Their blocking findings and the resulting changes:
+
+| Finding | Resolution |
+|---|---|
+| A missing/invalid bundle `identityKey` made `on_bundle_fetched` return before releasing the waiter; `on_other_bundle_result` also dereferenced it in a debug line | Stream module now treats it as a failed fetch (`bundle_fetch_failed`, no dereference); the manager releases or ignores the device |
+| Bundle failures held the whole message for 4+8+16+32+60 s (up to ~4.5 min with timeouts) | Removed bundle retry timers: ignore the device for one minute and continue immediately; the next send refetches |
+| Full-JID recipients put the unknown-device map under a different key than its consumers | `EncryptState`/session addresses/lookup normalized to the bare JID; remaining UI/DB full-JID uses fixed |
+| `WAIT` with `own_list == true` and no own device had no request/wake-up | `SendPolicy` returns `WONT_SEND` once the own list is known; `own_list == false` still waits |
+| `clear_files()` kept `file_widgets` alive, leaking every sent attachment | `file_widgets.clear()`; `dispose()` cancels previews; duplicate add guarded; test covers remove/clear |
+| Device-list retries could be shortened by ad-hoc requests | Attempts increment only when no retry timer is armed; 3 attempts with a 15 s OMEMO PEP timeout (~1 min worst case) |
+| `is_known_address()` made the "does not support OMEMO" guard pass on the second toggle for an empty list | `ensure_get_keys_for_jid` returns `UNSUPPORTED` when the known address has no usable device |
+| Offline key acceptance left an old session, and rejecting a key was one-way | Session/IKS updates happen without a stream; a refetch is queued for the next stream; reject keeps the pending key visible so it can be revisited; accept verifies the fingerprint the user saw |
+| MUC messages were not resumed on XEP-0198 resume | `stream_resumed` hook revives pending key requests |
+| Deleted pending messages could still be sent; body mutation corrupted the state hash map | Stable stanza-id hash + `MessageDeletion` hook |
+| Stale callbacks after reconnect | Stream generation counter (already in the first pass) |
+
+Retained as documented limitations: generic `send_iq_async` callers outside
+`Pubsub.request` still have no timeout; a room send still does the pre-existing
+per-recipient device query (cached within one pass now); animated attachments
+show their first frame; a restored-before-map HiDPI preview is decoded at 1x.
 
 ---
 
@@ -228,14 +269,22 @@ of GTK's file loader.
 
 ## Performance constraints
 
-- No polling loops; retries are one timer per JID and only while messages are
-  pending.
+- No polling loops; device-list retries are one timer per JID and only while a
+  message is waiting. Bundle fetch failures have no timer at all: the device is
+  ignored for one minute and the waiter continues immediately.
 - `is_known_address()` keeps a single indexed query on the (small) trust table
-  on the common path.
-- `message_states` only contains pending messages; scans stay proportional to
-  that set.
+  on the common path; the legacy fallback only runs for addresses without a
+  trust row.
+- `message_states` holds only messages that can still be sent or revived; it is
+  pruned on send, account removal and message deletion. States for a devicelist
+  give-up or a pending identity key are retained deliberately so a later
+  subscription/key acceptance can revive them.
+- Room sends still have the pre-existing per-recipient N+1 (`get_trusted_devices`
+  twice); the branch caches the list within one encryption pass and avoids the
+  MUC affiliation query for one-to-one chats, so it does not add to it.
 - Image previews are decoded once, off the main loop, at 64x64 (times the
-  widget scale factor), and cancelled when the attachment is removed.
+  widget scale factor), and cancelled when the attachment is removed; the
+  widget/texture maps are cleared after send and on dispose.
 
 ## Tests
 
@@ -243,8 +292,13 @@ of GTK's file loader.
   WebP (`static` and `animated`), an interlaced GIF and a non-square JPEG
   (`orientation-6.jpg`) to a real `ChatInput.View` and asserts that the
   attachment preview has a decoded `Gdk.Texture` paintable with a positive
-  intrinsic size and that `FixedRatioPicture.file` is not used. This fails on
-  the pre-fix code (transparent `GtkSvg` placeholder).
+  intrinsic size and that `FixedRatioPicture.file` is not used. The pre-fix
+  code used `Gtk.Picture.file`, which the exploratory probe showed resolving
+  GIF/WebP to a transparent `GtkSvg` placeholder on GTK 4.24; the committed
+  test pins the corrected mechanism (texture paintable, no file loader) rather
+  than rasterising a window. It also covers duplicate add, remove and
+  `clear_files`, and disposes each view. Views are not placed in a window, so
+  the test runs at scale factor 1.
 - `plugins/omemo/tests/policy.vala`: `SendPolicy` (including the zero-recipient
   device keyless-send guard), `RetryPolicy` backoff and `DeviceListResult`.
 - `xmpp-vala/tests/module_hardening.vala`:

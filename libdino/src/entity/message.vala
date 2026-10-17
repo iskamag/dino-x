@@ -299,8 +299,10 @@ public class Message : Object {
     }
 
     public static uint hash_func(Message message) {
-        if (message.body == null) return 0;
-        return message.body.hash();
+        // The body is mutable (deletions clear it, corrections replace it).
+        // Hashing it would corrupt maps that use the message as a key.
+        if (message.stanza_id == null) return 0;
+        return message.stanza_id.hash();
     }
 
     private void on_update(Object o, ParamSpec sp) {

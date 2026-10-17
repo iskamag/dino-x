@@ -195,7 +195,7 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
         bool key_active = device[plugin.db.identity_meta.now_active];
         if (store != null) {
             try {
-                Address address = new Address(jid.to_string(), device[plugin.db.identity_meta.device_id]);
+                Address address = new Address(jid.bare_jid.to_string(), device[plugin.db.identity_meta.device_id]);
                 SessionRecord? session = null;
                 if (store.contains_session(address)) {
                     session = store.load_session(address);
@@ -248,7 +248,7 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
             int identity_id = plugin.db.identity.get_id(account.id);
             if (identity_id < 0) return false;
 
-            foreach (Row device in plugin.db.identity_meta.get_new_devices(identity_id, jid.to_string())) {
+            foreach (Row device in plugin.db.identity_meta.get_new_devices(identity_id, jid.bare_jid.to_string())) {
                 plugin.trust_manager.set_device_trust(account, jid, device[plugin.db.identity_meta.device_id], TrustLevel.TRUSTED);
                 add_fingerprint(device, TrustLevel.TRUSTED);
             }
@@ -317,8 +317,9 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
     }
 
     private void add_pending_identity_key(Row device) {
-        string old_key = device[plugin.db.identity_meta.identity_key_public_base64];
-        string new_key = device[plugin.db.identity_meta.pending_identity_key_public_base64];
+        string? old_key = device[plugin.db.identity_meta.identity_key_public_base64];
+        string? new_key = device[plugin.db.identity_meta.pending_identity_key_public_base64];
+        if (old_key == null || new_key == null) return;
 
         Adw.ActionRow action_row = new Adw.ActionRow() { use_markup = true };
         action_row.title = _("Key changed");
@@ -341,8 +342,7 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
             if (app == null) return;
             Manager? manager = app.stream_interactor.get_module(Manager.IDENTITY);
             if (manager == null) return;
-            if (manager.accept_pending_identity_key(account, jid, device[plugin.db.identity_meta.device_id])) {
-                remove_key_row(action_row);
+            if (manager.accept_pending_identity_key(account, jid, device[plugin.db.identity_meta.device_id], new_key)) {
                 redraw_key_list();
             }
         });
@@ -353,7 +353,6 @@ public class OmemoPreferencesWidget : Adw.PreferencesGroup {
             Manager? manager = app.stream_interactor.get_module(Manager.IDENTITY);
             if (manager == null) return;
             if (manager.reject_pending_identity_key(account, jid, device[plugin.db.identity_meta.device_id])) {
-                remove_key_row(action_row);
                 redraw_key_list();
             }
         });

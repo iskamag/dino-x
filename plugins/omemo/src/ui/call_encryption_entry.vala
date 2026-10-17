@@ -17,7 +17,7 @@ namespace Dino.Plugins.Omemo {
             if (omemo_encryption == null) return null;
 
             int identity_id = db.identity.get_id(account.id);
-            Row? device = db.identity_meta.get_device(identity_id, omemo_encryption.jid.to_string(), omemo_encryption.sid);
+            Row? device = db.identity_meta.get_device(identity_id, omemo_encryption.jid.bare_jid.to_string(), omemo_encryption.sid);
             if (device == null) return null;
             TrustLevel trust = (TrustLevel) device[db.identity_meta.trust_level];
 

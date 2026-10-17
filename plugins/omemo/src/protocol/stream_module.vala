@@ -67,6 +67,9 @@ public class StreamModule : XmppStreamModule {
         // A fresh stream cannot answer requests issued for a previous one.
         stream_generation++;
         clear_pending_requests(false);
+        // OMEMO PEP requests are latency-sensitive: do not keep a message
+        // waiting for the full generic timeout.
+        stream.get_module(Pubsub.Module.IDENTITY).request_timeout_seconds = 15;
         stream.get_module(Pubsub.Module.IDENTITY).add_filtered_notification(stream, NODE_DEVICELIST,
                 (stream, jid, id, node) => {
                     if (node != null) parse_device_list(stream, jid, id, node);
@@ -280,9 +283,15 @@ public class StreamModule : XmppStreamModule {
             bundle_fetch_failed(jid, device_id);
         } else {
             Bundle bundle = new Bundle(node);
-            stream.get_module(IDENTITY).unignore_device(jid, device_id);
-            debug("Received bundle for %s/%d: %s", jid.bare_jid.to_string(), device_id, Base64.encode(bundle.identity_key.serialize()));
-            bundle_fetched(jid, device_id, bundle);
+            ECPublicKey? identity_key = bundle.identity_key;
+            if (identity_key == null) {
+                warning("Ignoring bundle for %s/%d without a usable identity key", jid.bare_jid.to_string(), device_id);
+                bundle_fetch_failed(jid, device_id);
+            } else {
+                stream.get_module(IDENTITY).unignore_device(jid, device_id);
+                debug("Received bundle for %s/%d: %s", jid.bare_jid.to_string(), device_id, Base64.encode(identity_key.serialize()));
+                bundle_fetched(jid, device_id, bundle);
+            }
         }
     }
 
@@ -329,16 +338,14 @@ public class StreamModule : XmppStreamModule {
         if (begin_bundle_request(jid, (int32) store.local_registration_id)) {
             uint generation = stream_generation;
             stream.get_module(Pubsub.Module.IDENTITY).request(stream, jid, @"$NODE_BUNDLES:$(store.local_registration_id)", (stream, from_jid, id, node, success) => {
+                end_bundle_request(jid, (int32) store.local_registration_id);
                 if (generation != stream_generation) return;
-                on_self_bundle_result(stream, from_jid, id, node, success);
+                on_self_bundle_result(stream, from_jid ?? jid, id, node, success);
             });
         }
     }
 
-    private void on_self_bundle_result(XmppStream stream, Jid? jid_, string? id, StanzaNode? node, bool success) {
-        if (jid_ == null) return;
-        Jid jid = (!)jid_;
-        end_bundle_request(jid, (int32) store.local_registration_id);
+    private void on_self_bundle_result(XmppStream stream, Jid jid, string? id, StanzaNode? node, bool success) {
         if (!success) {
             warning("Could not load own OMEMO bundle for %s, not republishing", jid.to_string());
             return;

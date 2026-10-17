@@ -303,8 +303,10 @@ class ModuleHardeningTest : Gee.TestCase {
             outcome.success = success;
             loop.quit();
         });
-        Timeout.add_seconds(3, () => { loop.quit(); return false; });
+        uint guard_id = 0;
+        guard_id = Timeout.add_seconds(3, () => { guard_id = 0; loop.quit(); return false; });
         loop.run();
+        if (guard_id != 0) Source.remove(guard_id);
 
         fail_if_not(outcome.called, "pubsub listener was not released on timeout");
         fail_if(outcome.success, "pubsub timeout reported as success");

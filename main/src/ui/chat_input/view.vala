@@ -61,6 +61,8 @@ public class View : Box {
     }
 
     public void add_file(File file) {
+        if (file_widgets.has_key(file)) return;
+
         FileInfo file_info;
         try {
             file_info = file.query_info("*", FileQueryInfoFlags.NONE);
@@ -126,6 +128,7 @@ public class View : Box {
             var preview = yield ImagePreview.load(file, 64 * scale, 64 * scale, cancellable);
             if (cancellable.is_cancelled() || preview.pixbuf == null) return;
             picture.paintable = Gdk.Texture.for_pixbuf(preview.pixbuf);
+            if (preview_cancellables[file] == cancellable) preview_cancellables.unset(file);
         } catch (Error e) {
             if (!(e is IOError.CANCELLED)) {
                 warning("Could not load image preview for %s: %s", file.get_path() ?? file.get_uri(), e.message);
@@ -305,6 +308,18 @@ public class View : Box {
             file_box.remove(file_child);
             file_child = file_box.get_first_child();
         }
+        // The removed overlays/pictures/textures must not be retained by the
+        // map until the window dies.
+        file_widgets.clear();
+    }
+
+    public override void dispose() {
+        foreach (var cancellable in preview_cancellables.values) {
+            cancellable.cancel();
+        }
+        preview_cancellables.clear();
+        file_widgets.clear();
+        base.dispose();
     }
 
     public void do_focus() {

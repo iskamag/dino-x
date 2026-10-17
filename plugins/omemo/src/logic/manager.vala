@@ -25,7 +25,17 @@ public class SendPolicy : Object {
         if (enc.other_failure > 0 || (enc.other_lost == enc.other_devices && enc.other_devices > 0)) {
             return MessageSendDecision.WONT_SEND;
         }
-        if (!enc.own_list || enc.own_devices == 0 || enc.own_unknown > 0 || enc.other_unknown > 0 || enc.other_waiting_lists > 0) {
+        // No own device list yet: wait for the fetch. Once it is known but
+        // contains no usable own device, sending is impossible (the message
+        // could not be decrypted on our other devices) and waiting has no
+        // request or wake-up attached to it.
+        if (!enc.own_list) {
+            return MessageSendDecision.WAIT;
+        }
+        if (enc.own_devices == 0) {
+            return MessageSendDecision.WONT_SEND;
+        }
+        if (enc.own_unknown > 0 || enc.other_unknown > 0 || enc.other_waiting_lists > 0) {
             return MessageSendDecision.WAIT;
         }
         // Known address but no usable recipient device: sending here would emit
@@ -41,7 +51,7 @@ public class SendPolicy : Object {
 }
 
 public class RetryPolicy : Object {
-    public const int MAX_ATTEMPTS = 5;
+    public const int MAX_ATTEMPTS = 3;
     public const uint MAX_DELAY_SECONDS = 60;
 
     public static uint delay_seconds(int attempt) {
@@ -64,8 +74,6 @@ public class Manager : StreamInteractionModule, Object {
     // messages are actually waiting, so idle accounts do no work.
     private HashMap<string, uint> devicelist_retry_timeouts = new HashMap<string, uint>();
     private HashMap<string, int> devicelist_retry_attempts = new HashMap<string, int>();
-    private HashMap<string, uint> bundle_retry_timeouts = new HashMap<string, uint>();
-    private HashMap<string, int> bundle_retry_attempts = new HashMap<string, int>();
 
     private class MessageState {
         public Entities.Message msg { get; private set; }
@@ -126,9 +134,15 @@ public class Manager : StreamInteractionModule, Object {
         this.encryptors = encryptors;
 
         stream_interactor.account_added.connect(on_account_added);
+        stream_interactor.account_removed.connect(on_account_removed);
         stream_interactor.stream_negotiated.connect(on_stream_negotiated);
+        stream_interactor.stream_resumed.connect(on_stream_resumed);
         stream_interactor.get_module(MessageProcessor.IDENTITY).pre_message_send.connect(on_pre_message_send);
         stream_interactor.get_module(RosterManager.IDENTITY).mutual_subscription.connect(on_mutual_subscription);
+        MessageDeletion? deletion = stream_interactor.get_module(MessageDeletion.IDENTITY);
+        if (deletion != null) {
+            deletion.item_deleted.connect(on_item_deleted);
+        }
     }
 
     public void clear_device_list(Account account) {
@@ -141,7 +155,10 @@ public class Manager : StreamInteractionModule, Object {
     private Gee.List<Jid> get_occupants(Jid jid, Account account){
         Gee.List<Jid> occupants = new ArrayList<Jid>(Jid.equals_bare_func);
         if(!stream_interactor.get_module(MucManager.IDENTITY).is_groupchat(jid, account)){
+            // A one-to-one conversation has exactly one recipient; do not run
+            // the MUC affiliation query for every send/retry.
             occupants.add(jid);
+            return occupants;
         }
         Gee.List<Jid>? occupant_jids = stream_interactor.get_module(MucManager.IDENTITY).get_offline_members(jid, account);
         if(occupant_jids == null) {
@@ -289,7 +306,20 @@ public class Manager : StreamInteractionModule, Object {
 
         reset_retries(account);
         module.request_user_devicelist.begin(stream, account.bare_jid);
+        resume_pending_messages(account, stream);
+    }
 
+    private void on_stream_resumed(Account account, XmppStream stream) {
+        // A resumed stream never emits stream_negotiated. MUC messages are not
+        // re-sent by MessageProcessor on resume, so their key requests have to
+        // be revived here.
+        StreamModule? module = stream_interactor.module_manager.get_module(account, StreamModule.IDENTITY);
+        if (module == null) return;
+        reset_retries(account);
+        resume_pending_messages(account, stream);
+    }
+
+    private void resume_pending_messages(Account account, XmppStream stream) {
         // Resume messages that were waiting for keys when the stream went away.
         var pending = new ArrayList<Entities.Message>();
         lock (message_states) {
@@ -301,6 +331,33 @@ public class Manager : StreamInteractionModule, Object {
             MessageState? state = message_states[msg];
             if (state == null) continue;
             request_missing_keys(stream, account, msg, (!)state);
+        }
+    }
+
+    private void on_account_removed(Account account) {
+        lock (message_states) {
+            var remove = new ArrayList<Entities.Message>();
+            foreach (var msg in message_states.keys) {
+                if (msg.account.equals(account)) remove.add(msg);
+            }
+            foreach (var msg in remove) {
+                message_states.unset(msg);
+            }
+        }
+        reset_retries(account);
+    }
+
+    private void on_item_deleted(ContentItem item) {
+        if (!(item is MessageItem)) return;
+        lock (message_states) {
+            message_states.unset(((MessageItem) item).message);
+        }
+    }
+
+    private void reset_send_attempt(Entities.Message msg) {
+        lock (message_states) {
+            MessageState? state = message_states[msg];
+            if (state != null) state.active_send_attempt = false;
         }
     }
 
@@ -368,9 +425,15 @@ public class Manager : StreamInteractionModule, Object {
             }
         }
         foreach (Entities.Message msg in send_now) {
-            if (msg.counterpart == null) continue;
+            if (msg.counterpart == null) {
+                reset_send_attempt(msg);
+                continue;
+            }
             Entities.Conversation? conv = stream_interactor.get_module(ConversationManager.IDENTITY).get_conversation(((!)msg.counterpart), account);
-            if (conv == null) continue;
+            if (conv == null) {
+                reset_send_attempt(msg);
+                continue;
+            }
             stream_interactor.get_module(MessageProcessor.IDENTITY).send_xmpp_message(msg, (!)conv, true);
         }
     }
@@ -386,15 +449,6 @@ public class Manager : StreamInteractionModule, Object {
         if (timeout_id != 0) Source.remove(timeout_id);
         devicelist_retry_timeouts.unset(key);
         devicelist_retry_attempts.unset(key);
-    }
-
-    private void cancel_bundle_retry(Account account, Jid jid, int32 device_id) {
-        string key = retry_key(account, jid, device_id);
-        uint timeout_id = 0;
-        if (bundle_retry_timeouts.has_key(key)) timeout_id = bundle_retry_timeouts[key];
-        if (timeout_id != 0) Source.remove(timeout_id);
-        bundle_retry_timeouts.unset(key);
-        bundle_retry_attempts.unset(key);
     }
 
     private void reset_retries(Account account) {
@@ -414,20 +468,6 @@ public class Manager : StreamInteractionModule, Object {
         }
         foreach (var key in devicelist_attempt_keys) devicelist_retry_attempts.unset(key);
 
-        var bundle_keys = new ArrayList<string>();
-        foreach (var key in bundle_retry_timeouts.keys) {
-            if (key.has_prefix(prefix)) bundle_keys.add(key);
-        }
-        foreach (var key in bundle_keys) {
-            Source.remove(bundle_retry_timeouts[key]);
-            bundle_retry_timeouts.unset(key);
-            bundle_retry_attempts.unset(key);
-        }
-        var bundle_attempt_keys = new ArrayList<string>();
-        foreach (var key in bundle_retry_attempts.keys) {
-            if (key.has_prefix(prefix)) bundle_attempt_keys.add(key);
-        }
-        foreach (var key in bundle_attempt_keys) bundle_retry_attempts.unset(key);
     }
 
     private void on_device_list_fetch_failed(Account account, Jid jid) {
@@ -445,6 +485,8 @@ public class Manager : StreamInteractionModule, Object {
         if (!waiting) return;
 
         string key = retry_key(account, jid);
+        // An ad-hoc request (new send, prefs toggle, PEP push) must not
+        // shorten the retry budget while a timer-driven retry is armed.
         if (devicelist_retry_timeouts.has_key(key)) return;
 
         int attempt = 1;
@@ -468,34 +510,34 @@ public class Manager : StreamInteractionModule, Object {
         });
     }
 
-    private void on_bundle_fetch_failed(Account account, Jid jid, int32 device_id) {
-        string key = retry_key(account, jid, device_id);
-        int attempt = 1;
-        if (bundle_retry_attempts.has_key(key)) attempt = bundle_retry_attempts[key] + 1;
-        bundle_retry_attempts[key] = attempt;
+    private static bool failed_device_in_map(HashMap<string, ArrayList<int32>> failed_by_jid, Jid jid, int32 device_id) {
+        ArrayList<int32>? devices = failed_by_jid[jid.bare_jid.to_string()];
+        return devices != null && devices.contains(device_id);
+    }
 
-        if (attempt > RetryPolicy.MAX_ATTEMPTS) {
-            warning("Giving up fetching the OMEMO bundle for %s/%d after %d attempts", jid.to_string(), device_id, RetryPolicy.MAX_ATTEMPTS);
-            XmppStream? stream = stream_interactor.get_stream(account);
-            if (stream != null) {
-                StreamModule? module = stream.get_module(StreamModule.IDENTITY);
-                if (module != null) module.ignore_device(jid, device_id);
+    private bool message_waits_for_device(Account account, Jid jid, int32 device_id) {
+        lock (message_states) {
+            foreach (Entities.Message msg in message_states.keys) {
+                if (!message_targets_jid(msg, account, jid)) continue;
+                MessageState state = message_states[msg];
+                if (failed_device_in_map(state.waiting_other_sessions_by_jid, jid, device_id)) return true;
+                if (failed_device_in_map(state.waiting_own_sessions_by_jid, jid, device_id)) return true;
             }
-            bundle_retry_attempts.unset(key);
-            continue_message_sending(account, jid, device_id);
-            return;
         }
+        return false;
+    }
 
-        if (bundle_retry_timeouts.has_key(key)) return;
-        uint delay = RetryPolicy.delay_seconds(attempt);
-        bundle_retry_timeouts[key] = Timeout.add_seconds(delay, () => {
-            bundle_retry_timeouts.unset(key);
-            XmppStream? stream = stream_interactor.get_stream(account);
-            if (stream == null) return false;
+    private void on_bundle_fetch_failed(Account account, Jid jid, int32 device_id) {
+        // A single unreachable device must not hold the whole message hostage.
+        // Only deals with failures for a device some message is actually
+        // waiting for; bookkeeping fetches from the key list are left alone.
+        if (!message_waits_for_device(account, jid, device_id)) return;
+        XmppStream? stream = stream_interactor.get_stream(account);
+        if (stream != null) {
             StreamModule? module = stream.get_module(StreamModule.IDENTITY);
-            if (module != null) module.fetch_bundle(stream, jid, device_id, false);
-            return false;
-        });
+            if (module != null) module.ignore_device(jid, device_id);
+        }
+        continue_message_sending(account, jid, device_id);
     }
 
     private void mark_waiting_messages_wont_send(Account account, Jid jid, bool only_devicelist) {
@@ -514,6 +556,14 @@ public class Manager : StreamInteractionModule, Object {
         if (identity_id < 0) return;
         if (bundle.identity_key == null) {
             warning("Ignoring OMEMO bundle for %s/%d without a usable identity key", jid.bare_jid.to_string(), device_id);
+            if (message_waits_for_device(account, jid, device_id)) {
+                XmppStream? stream = stream_interactor.get_stream(account);
+                if (stream != null) {
+                    StreamModule? module = stream.get_module(StreamModule.IDENTITY);
+                    if (module != null) module.ignore_device(jid, device_id);
+                }
+                continue_message_sending(account, jid, device_id);
+            }
             return;
         }
 
@@ -544,13 +594,10 @@ public class Manager : StreamInteractionModule, Object {
             // The pending key is stored by insert_device_bundle(). Keep the old
             // key, do not release the message waiters and surface the message as
             // failed until the user accepts the new key explicitly.
-            cancel_bundle_retry(account, jid, device_id);
             trust_manager.bad_message_state_updated(account, jid, device_id);
             mark_waiting_messages_wont_send(account, jid, false);
             return;
         }
-        cancel_bundle_retry(account, jid, device_id);
-
         if (should_start_session(account, jid)) {
             XmppStream? stream = stream_interactor.get_stream(account);
             if (stream != null) {
@@ -604,49 +651,64 @@ public class Manager : StreamInteractionModule, Object {
             }
         }
         foreach (Entities.Message msg in send_now) {
-            if (msg.counterpart == null) continue;
+            if (msg.counterpart == null) {
+                reset_send_attempt(msg);
+                continue;
+            }
             Entities.Conversation? conv = stream_interactor.get_module(ConversationManager.IDENTITY).get_conversation(((!)msg.counterpart), account);
-            if (conv == null) continue;
+            if (conv == null) {
+                reset_send_attempt(msg);
+                continue;
+            }
             stream_interactor.get_module(MessageProcessor.IDENTITY).send_xmpp_message(msg, (!)conv, true);
         }
     }
 
-    public bool accept_pending_identity_key(Account account, Jid jid, int32 device_id) {
+    public bool accept_pending_identity_key(Account account, Jid jid, int32 device_id, string? expected_key = null) {
         int identity_id = db.identity.get_id(account.id);
         if (identity_id < 0) return false;
         string address = jid.bare_jid.to_string();
+
+        Qlite.Row? before = db.identity_meta.get_device(identity_id, address, device_id);
+        if (before == null || before[db.identity_meta.pending_identity_key_public_base64] == null) return false;
+        if (expected_key != null && before[db.identity_meta.pending_identity_key_public_base64] != expected_key) {
+            // The key changed again between rendering the dialog and the click.
+            warning("Refusing to accept a stale pending OMEMO identity key for %s/%d", address, device_id);
+            return false;
+        }
         if (!db.identity_meta.accept_pending_identity_key(identity_id, address, device_id)) return false;
 
-        XmppStream? stream = stream_interactor.get_stream(account);
-        if (stream != null) {
-            StreamModule? module = stream.get_module(StreamModule.IDENTITY);
-            if (module != null) {
-                Row? device = db.identity_meta.get_device(identity_id, address, device_id);
-                if (device != null && device[db.identity_meta.identity_key_public_base64] != null) {
-                    // libomemo's in-memory identity key store still holds the
-                    // refused key; replace it or the newly fetched bundle will
-                    // be rejected as untrusted when building the session.
-                    try {
-                        module.store.identity_key_store.save_identity(new Address(address, device_id),
-                            Base64.decode(device[db.identity_meta.identity_key_public_base64]));
-                    } catch (Error e) {
-                        debug("Could not store accepted OMEMO identity key for %s/%d: %s", address, device_id, e.message);
-                    }
-                }
+        // Update the in-memory identity key store and drop the stale session
+        // even when the account is offline; otherwise the old session keeps
+        // encrypting with the refused identity after an offline accept.
+        StreamModule? module = stream_interactor.module_manager.get_module(account, StreamModule.IDENTITY);
+        if (module != null) {
+            Qlite.Row? device = db.identity_meta.get_device(identity_id, address, device_id);
+            if (device != null && device[db.identity_meta.identity_key_public_base64] != null) {
                 try {
-                    Address session_address = new Address(address, device_id);
-                    if (module.store.session_store.contains_session(session_address)) {
-                        module.store.session_store.delete_session(session_address);
-                    }
+                    module.store.identity_key_store.save_identity(new Address(address, device_id),
+                        Base64.decode(device[db.identity_meta.identity_key_public_base64]));
                 } catch (Error e) {
-                    debug("Could not delete old OMEMO session with %s/%d: %s", address, device_id, e.message);
+                    debug("Could not store accepted OMEMO identity key for %s/%d: %s", address, device_id, e.message);
                 }
-                module.unignore_device(jid, device_id);
+            }
+            try {
+                Address session_address = new Address(address, device_id);
+                if (module.store.session_store.contains_session(session_address)) {
+                    module.store.session_store.delete_session(session_address);
+                }
+            } catch (Error e) {
+                debug("Could not delete old OMEMO session with %s/%d: %s", address, device_id, e.message);
+            }
+            module.unignore_device(jid, device_id);
+            XmppStream? stream = stream_interactor.get_stream(account);
+            if (stream != null) {
                 module.fetch_bundle(stream, jid.bare_jid, device_id, false);
             }
         }
 
-        // Back to "pending", not "failed"; the refetched bundle releases the waiters.
+        // Back to "pending", not "failed"; the refetched bundle (or the next
+        // reconnect) releases the waiters.
         lock (message_states) {
             foreach (Entities.Message msg in message_states.keys) {
                 if (!message_targets_jid(msg, account, jid)) continue;
@@ -662,7 +724,8 @@ public class Manager : StreamInteractionModule, Object {
         int identity_id = db.identity.get_id(account.id);
         if (identity_id < 0) return false;
         string address = jid.bare_jid.to_string();
-        db.identity_meta.clear_pending_identity_key(identity_id, address, device_id);
+        // Keep the pending key so the decision stays visible and can be
+        // revisited; only the trust level changes.
         db.identity_meta.update()
             .with(db.identity_meta.identity_id, "=", identity_id)
             .with(db.identity_meta.address_name, "=", address)
@@ -728,7 +791,9 @@ public class Manager : StreamInteractionModule, Object {
 
     public async KeyFetchResult ensure_get_keys_for_conversation(Conversation conversation) {
         if (stream_interactor.get_module(MucManager.IDENTITY).is_private_room(conversation.account, conversation.counterpart)) {
-            foreach (Jid offline_member in stream_interactor.get_module(MucManager.IDENTITY).get_offline_members(conversation.counterpart, conversation.account)) {
+            Gee.List<Jid>? offline_members = stream_interactor.get_module(MucManager.IDENTITY).get_offline_members(conversation.counterpart, conversation.account);
+            if (offline_members == null) return KeyFetchResult.FAILED;
+            foreach (Jid offline_member in (!)offline_members) {
                 KeyFetchResult result = yield ensure_get_keys_for_jid(conversation.account, offline_member);
                 if (result != KeyFetchResult.OK) {
                     return result;
@@ -741,7 +806,12 @@ public class Manager : StreamInteractionModule, Object {
     }
 
     public async KeyFetchResult ensure_get_keys_for_jid(Account account, Jid jid) {
-        if (trust_manager.is_known_address(account, jid)) return KeyFetchResult.OK;
+        if (trust_manager.is_known_address(account, jid)) {
+            // The device list is known; without a usable device the contact is
+            // effectively unsupported (empty list, all devices rejected, or a
+            // pending key change).
+            return trust_manager.get_trusted_devices(account, jid).size > 0 ? KeyFetchResult.OK : KeyFetchResult.UNSUPPORTED;
+        }
         XmppStream? stream = stream_interactor.get_stream(account);
         if (stream == null) return KeyFetchResult.FAILED;
         StreamModule? module = stream_interactor.module_manager.get_module(account, StreamModule.IDENTITY);

@@ -350,7 +350,29 @@ private void test_presend_attachment_preview() {
         assert_true(paintable.get_intrinsic_width() > 0);
         assert_true(paintable.get_intrinsic_height() > 0);
         assert_false(paintable.get_type().name().contains("Svg"));
+        view.dispose();
     }
+
+    // Removing and re-adding the same file must not leave a stale overlay (and
+    // texture) behind; clear_files() is called after every send.
+    var view = new Dino.Ui.ChatInput.View().init(app.stream_interactor);
+    var file = File.new_for_path(Path.build_filename(fixture_dir, "static.png"));
+    view.add_file(file);
+    view.add_file(file);
+    assert_cmpint(child_count(view.file_box), CompareOperator.EQ, 1);
+    view.remove_file(file);
+    assert_cmpint(child_count(view.file_box), CompareOperator.EQ, 0);
+    view.add_file(file);
+    assert_cmpint(child_count(view.file_box), CompareOperator.EQ, 1);
+    view.clear_files();
+    assert_cmpint(child_count(view.file_box), CompareOperator.EQ, 0);
+    view.dispose();
+}
+
+private int child_count(Gtk.Widget widget) {
+    int count = 0;
+    for (Gtk.Widget? child = widget.get_first_child(); child != null; child = child.get_next_sibling()) count++;
+    return count;
 }
 
 int main(string[] args) {

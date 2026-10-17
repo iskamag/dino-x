@@ -14,6 +14,7 @@ class PolicyTest : Gee.TestCase {
         add_test("waiting_for_own_list", test_waiting_for_own_list);
         add_test("waiting_for_sessions", test_waiting_for_sessions);
         add_test("no_own_devices", test_no_own_devices);
+        add_test("own_list_unknown", test_own_list_unknown);
         add_test("no_recipient_devices", test_no_recipient_devices);
         add_test("unencrypted", test_unencrypted);
         add_test("all_recipient_devices_lost", test_all_recipient_devices_lost);
@@ -55,7 +56,16 @@ class PolicyTest : Gee.TestCase {
     }
 
     private void test_no_own_devices() {
+        // The own list is known but no own device is usable: waiting has no
+        // request/wake-up, so this must fail visibly instead of hanging.
         var state = ready_state();
+        state.own_devices = 0;
+        assert_cmpint(SendPolicy.decide(state), CompareOperator.EQ, MessageSendDecision.WONT_SEND);
+    }
+
+    private void test_own_list_unknown() {
+        var state = ready_state();
+        state.own_list = false;
         state.own_devices = 0;
         assert_cmpint(SendPolicy.decide(state), CompareOperator.EQ, MessageSendDecision.WAIT);
     }
