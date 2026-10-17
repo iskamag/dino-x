@@ -108,27 +108,19 @@ public class MessageStorage : StreamInteractionModule, Object {
 
     public HashMap<int, Message> get_messages_by_ids(Gee.Collection<int> ids, Conversation conversation) {
         var ret = new HashMap<int, Message>();
-        var missing = new ArrayList<int>();
+        var missing = new HashSet<int>();
         foreach (int id in ids) {
             Message? cached = messages_by_db_id[id];
             if (cached != null) {
                 touch_message(cached);
                 ret[id] = cached;
-            } else if (!missing.contains(id)) {
+            } else {
                 missing.add(id);
             }
         }
         if (missing.is_empty) return ret;
 
-        var placeholders = new StringBuilder();
-        string[] args = new string[missing.size];
-        for (int i = 0; i < missing.size; i++) {
-            if (i > 0) placeholders.append(",");
-            placeholders.append("?");
-            args[i] = missing[i].to_string();
-        }
-        var query = db.message.select()
-                .where(@"$(db.message.id) IN ($(placeholders.str))", args)
+        var query = db.message.select_by_ids(db.message.id, missing)
                 .outer_join_with(db.message_occupant_id, db.message_occupant_id.message_id, db.message.id)
                 .outer_join_with(db.message_correction, db.message_correction.message_id, db.message.id)
                 .outer_join_with(db.reply, db.reply.message_id, db.message.id);
@@ -141,19 +133,20 @@ public class MessageStorage : StreamInteractionModule, Object {
     }
 
     public void preload_body_meta(Gee.Collection<Message> messages) {
-        var ids = new ArrayList<int>();
+        var ids = new HashSet<int>();
         foreach (Message message in messages) {
-            if (!message.body_meta_loaded && !ids.contains(message.id)) ids.add(message.id);
+            if (!message.body_meta_loaded) ids.add(message.id);
         }
         if (ids.is_empty) return;
 
         var rows_by_message = new HashMap<int, ArrayList<Row>>();
         var placeholders = new StringBuilder();
         string[] args = new string[ids.size];
-        for (int i = 0; i < ids.size; i++) {
+        int i = 0;
+        foreach (int id in ids) {
             if (i > 0) placeholders.append(",");
             placeholders.append("?");
-            args[i] = ids[i].to_string();
+            args[i++] = id.to_string();
         }
         foreach (Row row in db.body_meta.select().where(@"$(db.body_meta.message_id) IN ($(placeholders.str))", args)) {
             int message_id = row[db.body_meta.message_id];
@@ -161,6 +154,8 @@ public class MessageStorage : StreamInteractionModule, Object {
             rows_by_message[message_id].add(row);
         }
         foreach (Message message in messages) {
+            // Messages that were already loaded keep their in-memory markups.
+            if (message.body_meta_loaded) continue;
             var rows = rows_by_message[message.id];
             message.set_body_meta_rows(rows ?? new ArrayList<Row>());
         }

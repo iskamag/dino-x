@@ -171,6 +171,81 @@ private async void test_dedupe_scopes_message_type_async() throws Error {
     assert_cmpint(app.stream_interactor.get_module(MessageStorage.IDENTITY).get_messages(room).size, CompareOperator.EQ, 1);
 }
 
+private void test_dedupe_sent_muc_pm() {
+    var loop = new MainLoop();
+    test_dedupe_sent_muc_pm_async.begin((obj, result) => {
+        try {
+            test_dedupe_sent_muc_pm_async.end(result);
+        } catch (Error e) {
+            GLib.Test.fail();
+            GLib.Test.message(e.message);
+        }
+        loop.quit();
+    });
+    loop.run();
+}
+
+private async void test_dedupe_sent_muc_pm_async() throws Error {
+    var app = get_service_app();
+    var account = create_account(app);
+    app.stream_interactor.module_manager.initialize(account);
+    app.stream_interactor.account_added(account);
+    var conversations = app.stream_interactor.get_module(ConversationManager.IDENTITY);
+    var alice = Xmpp.Jid.from_string("room@example.com/Alice");
+    var bob = Xmpp.Jid.from_string("room@example.com/Bob");
+    var alice_pm = conversations.create_conversation(alice, account, Conversation.Type.GROUPCHAT_PM);
+    var bob_pm = conversations.create_conversation(bob, account, Conversation.Type.GROUPCHAT_PM);
+    var ourpart = account.bare_jid.with_resource("laptop");
+    var now = new DateTime.now_utc();
+
+    var to_alice = new Entities.Message("hi") {
+        account=account, counterpart=alice, ourpart=ourpart, direction=Entities.Message.DIRECTION_SENT,
+        type_=Entities.Message.Type.GROUPCHAT_PM, time=now, local_time=now
+    };
+    var to_bob = new Entities.Message("hi") {
+        account=account, counterpart=bob, ourpart=ourpart, direction=Entities.Message.DIRECTION_SENT,
+        type_=Entities.Message.Type.GROUPCHAT_PM, time=now, local_time=now
+    };
+    var alice_stanza = new Xmpp.MessageStanza() { from=ourpart, to=alice };
+    alice_stanza.body = "hi";
+    var bob_stanza = new Xmpp.MessageStanza() { from=ourpart, to=bob };
+    bob_stanza.body = "hi";
+
+    var processor = app.stream_interactor.get_module(MessageProcessor.IDENTITY);
+    assert_false(yield processor.received_pipeline.run(to_alice, alice_stanza, alice_pm));
+    assert_false(yield processor.received_pipeline.run(to_bob, bob_stanza, bob_pm));
+
+    assert_cmpint((int) app.db.message.select().with(app.db.message.account_id, "=", account.id).count(), CompareOperator.EQ, 2);
+    assert_cmpint(app.stream_interactor.get_module(MessageStorage.IDENTITY).get_messages(alice_pm).size, CompareOperator.EQ, 1);
+    assert_cmpint(app.stream_interactor.get_module(MessageStorage.IDENTITY).get_messages(bob_pm).size, CompareOperator.EQ, 1);
+}
+
+private void test_preload_body_meta_preserves_loaded() {
+    try {
+        var app = get_service_app();
+        var account = create_account(app);
+        var conversation = state_conversation(app, account, "peer@example.com");
+        var loaded = state_message(app, conversation, "hello world");
+
+        var types = new Gee.ArrayList<Xmpp.Xep.MessageMarkup.SpanType>();
+        types.add(Xmpp.Xep.MessageMarkup.SpanType.EMPHASIS);
+        var spans = new Gee.ArrayList<Xmpp.Xep.MessageMarkup.Span>();
+        spans.add(new Xmpp.Xep.MessageMarkup.Span() { types=types, start_char=0, end_char=5 });
+        loaded.persist_markups(spans, loaded.id);
+        assert_cmpint(loaded.get_fallbacks().size, CompareOperator.EQ, 0);
+        assert_true(loaded.body_meta_loaded);
+        assert_cmpint(loaded.get_markups().size, CompareOperator.EQ, 1);
+
+        var fresh = state_message(app, conversation, "second");
+        var batch = new Gee.ArrayList<Message>();
+        batch.add(loaded);
+        batch.add(fresh);
+        app.stream_interactor.get_module(MessageStorage.IDENTITY).preload_body_meta(batch);
+
+        assert_cmpint(loaded.get_markups().size, CompareOperator.EQ, 1);
+    } catch (Error e) { GLib.Test.fail(); GLib.Test.message(e.message); }
+}
+
 private void check_correction_transmission(bool reload) {
     try {
         var app = get_service_app();
@@ -303,6 +378,8 @@ private void test_late_reply_widget() {
 
 private void add_message_state_regression_tests() {
     GLib.Test.add_func("/messages/dedupe-type-scope", test_dedupe_scopes_message_type);
+    GLib.Test.add_func("/messages/dedupe-sent-muc-pm", test_dedupe_sent_muc_pm);
+    GLib.Test.add_func("/messages/preload-body-meta", test_preload_body_meta_preserves_loaded);
     GLib.Test.add_func("/messages/after-backfilled", test_messages_after_backfilled);
     GLib.Test.add_func("/messages/sfs-source-sender", test_sfs_source_sender_scope);
     GLib.Test.add_func("/messages/cold-server-id", test_cold_server_id_lookup);
