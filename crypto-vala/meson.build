@@ -21,3 +21,8 @@ lib_crypto_vala = library('crypto-vala', sources, c_args: c_args, vala_args: val
 dep_crypto_vala = declare_dependency(link_with: lib_crypto_vala, include_directories: include_directories('.'))
 
 install_data('crypto-vala.deps', install_dir: get_option('datadir') / 'vala/vapi', install_tag: 'devel') # TODO: workaround for https://github.com/mesonbuild/meson/issues/9756
+
+exe_crypto_test = executable('crypto-test', files('tests/srtp.vala'),
+    dependencies: [dep_glib, dep_gio, dep_gee, dep_crypto_vala],
+    install: false)
+test('Crypto SRTP', exe_crypto_test)
