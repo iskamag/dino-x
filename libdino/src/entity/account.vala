@@ -67,10 +67,12 @@ public class Account : Object {
                 .perform();
 
         notify.connect(on_update);
+        db.invalidate_account_list_cache();
     }
 
     public void remove() {
         db.account.delete().with(db.account.bare_jid, "=", bare_jid.to_string()).perform();
+        db.invalidate_account_list_cache();
         notify.disconnect(on_update);
         id = -1;
         db = null;

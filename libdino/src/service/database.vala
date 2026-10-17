@@ -535,6 +535,7 @@ public class Database : Qlite.Database {
     public Map<int, Jid> jid_table_cache = new HashMap<int, Jid>();
     public Map<Jid, int> jid_table_reverse = new HashMap<Jid, int>(Jid.hash_func, Jid.equals_func);
     public Map<int, Account> account_table_cache = new HashMap<int, Account>();
+    private ArrayList<Account>? account_list_cache = null;
 
     public Database(string fileName) {
         base(fileName, VERSION);
@@ -723,6 +724,8 @@ public class Database : Qlite.Database {
     }
 
     public ArrayList<Account> get_accounts() {
+        if (account_list_cache != null) return (!)account_list_cache;
+
         ArrayList<Account> ret = new ArrayList<Account>(Account.equals_func);
         foreach(Row row in account.select()) {
             try {
@@ -736,7 +739,12 @@ public class Database : Qlite.Database {
                 warning("Ignoring account with invalid Jid: %s", e.message);
             }
         }
+        account_list_cache = ret;
         return ret;
+    }
+
+    public void invalidate_account_list_cache() {
+        account_list_cache = null;
     }
 
     public Account? get_account_by_id(int id) {

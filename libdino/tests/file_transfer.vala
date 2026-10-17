@@ -157,6 +157,15 @@ private void check_query_sql_args() {
     assert_cmpstr(row.get_text("value"), CompareOperator.EQ, "hello");
 }
 
+private void check_account_list_cache() {
+    int count = app.db.get_accounts().size;
+    var account = new Account(Xmpp.Jid.from_string(Xmpp.random_uuid() + "@example.com"), "");
+    account.persist(app.db);
+    assert_cmpint(app.db.get_accounts().size, CompareOperator.EQ, count + 1);
+    account.remove();
+    assert_cmpint(app.db.get_accounts().size, CompareOperator.EQ, count);
+}
+
 private void check_file_transfer_info_index() {
     var row = app.db.query_sql("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'file_transfer_info_idx'").get_next();
     assert_nonnull(row);
@@ -199,5 +208,6 @@ int main(string[] args) {
     GLib.Test.add_func("/file-transfers/truncated-download", () => run_check(4));
     GLib.Test.add_func("/file-transfers/query-sql-args", check_query_sql_args);
     GLib.Test.add_func("/file-transfers/info-index", check_file_transfer_info_index);
+    GLib.Test.add_func("/file-transfers/account-list-cache", check_account_list_cache);
     return GLib.Test.run();
 }
