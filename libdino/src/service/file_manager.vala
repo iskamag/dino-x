@@ -55,6 +55,11 @@ public class FileManager : StreamInteractionModule, Object {
     public const int HTTP_PROVIDER_ID = 0;
     public const int SFS_PROVIDER_ID = 2;
 
+    // Applied when the sender does not advertise a size. Without a bound an
+    // endless response would fill the disk.
+    public int64 max_unknown_size = 2L * 1024 * 1024 * 1024;
+    public int read_timeout_seconds = 60;
+
     public FileProvider? select_file_provider(FileTransfer file_transfer) {
         bool http_usable = file_transfer.provider == SFS_PROVIDER_ID;
         foreach (FileProvider file_provider in this.file_providers) {
@@ -255,6 +260,7 @@ public class FileManager : StreamInteractionModule, Object {
         OutputStream? output_stream = null;
         File? output_file = null;
         bool complete = false;
+        bool read_timed_out = false;
         try {
             // Get meta info
             FileReceiveData? receive_data = file_provider.get_file_receive_data(file_transfer);
@@ -302,9 +308,23 @@ public class FileManager : StreamInteractionModule, Object {
             output_stream = output_file.create(FileCreateFlags.REPLACE_DESTINATION);
             int buffer_size = 64 * 1024;
             uint8[] buffer = new uint8[buffer_size];
-            ssize_t read;
+            ssize_t read = 0;
             int64 bytes_written = 0;
-            while ((read = yield input_stream.read_async(buffer, Priority.LOW, file_transfer.cancellable)) > 0) {
+            while (true) {
+                uint timeout_id = read_timeout_seconds > 0 ? Timeout.add_seconds(read_timeout_seconds, () => {
+                    read_timed_out = true;
+                    file_transfer.cancellable.cancel();
+                    return Source.REMOVE;
+                }) : 0;
+                try {
+                    read = yield input_stream.read_async(buffer, Priority.LOW, file_transfer.cancellable);
+                } finally {
+                    if (timeout_id != 0 && !read_timed_out) Source.remove(timeout_id);
+                }
+                if (read <= 0) break;
+                if (file_meta.size < 0 && max_unknown_size >= 0 && bytes_written + read > max_unknown_size) {
+                    throw new IOError.FAILED(@"Download exceeds the limit for unknown-size transfers: $max_unknown_size bytes");
+                }
                 buffer.length = (int) read;
                 yield output_stream.write_async(buffer, Priority.LOW, file_transfer.cancellable);
                 buffer.length = buffer_size;
@@ -359,6 +379,9 @@ public class FileManager : StreamInteractionModule, Object {
             file_transfer.state = FileTransfer.State.COMPLETE;
             complete = true;
         } catch (IOError.CANCELLED e) {
+            if (read_timed_out) {
+                warning("Download read timed out after %d seconds", read_timeout_seconds);
+            }
             file_transfer.state = file_transfer.provider == HTTP_PROVIDER_ID || file_transfer.provider == SFS_PROVIDER_ID
                 ? FileTransfer.State.NOT_STARTED : FileTransfer.State.FAILED;
         } catch (Error e) {

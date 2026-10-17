@@ -18,7 +18,50 @@ private class FileTestApplication : GLib.Application, Dino.Application {
 
 private FileTestApplication app;
 
-private FileTransfer create_transfer(string url, int64 size) throws Error {
+private class EndlessFileProvider : Object, FileProvider {
+    public int id;
+    public int delay_us;
+    public EndlessFileProvider(int id, int delay_us = 0) { this.id = id; this.delay_us = delay_us; }
+
+    public override Encryption get_encryption(FileTransfer file_transfer, FileReceiveData receive_data, FileMeta file_meta) {
+        return Encryption.NONE;
+    }
+    public override FileMeta get_file_meta(FileTransfer file_transfer) throws FileReceiveError {
+        return new FileMeta() { size = -1, file_name = "endless.bin" };
+    }
+    public override FileReceiveData? get_file_receive_data(FileTransfer file_transfer) {
+        return new FileReceiveData();
+    }
+    public override async FileMeta get_meta_info(FileTransfer file_transfer, FileReceiveData receive_data, FileMeta file_meta) throws FileReceiveError {
+        return file_meta;
+    }
+    public override async InputStream download(FileTransfer file_transfer, FileReceiveData receive_data, FileMeta file_meta) throws IOError {
+        return new EndlessInputStream(delay_us);
+    }
+    public override int get_id() { return id; }
+}
+
+private class EndlessInputStream : InputStream {
+    private int delay_us;
+
+    public EndlessInputStream(int delay_us = 0) {
+        this.delay_us = delay_us;
+    }
+
+    public override ssize_t read(uint8[] buffer, Cancellable? cancellable = null) throws IOError {
+        if (cancellable != null) cancellable.set_error_if_cancelled();
+        if (delay_us > 0) Thread.usleep(delay_us);
+        if (cancellable != null) cancellable.set_error_if_cancelled();
+        for (int i = 0; i < buffer.length; i++) buffer[i] = (uint8) i;
+        return buffer.length;
+    }
+
+    public override bool close(Cancellable? cancellable = null) throws IOError {
+        return true;
+    }
+}
+
+private FileTransfer create_transfer(string url, int64 size, int provider = FileManager.SFS_PROVIDER_ID) throws Error {
     var account = new Account(Xmpp.Jid.from_string(Xmpp.random_uuid() + "@example.com"), "");
     account.persist(app.db);
     app.stream_interactor.module_manager.initialize(account);
@@ -28,9 +71,11 @@ private FileTransfer create_transfer(string url, int64 size) throws Error {
     app.stream_interactor.get_module(ConversationManager.IDENTITY).create_conversation(peer, account, Conversation.Type.CHAT);
     var transfer = new FileTransfer() {
         account=account, counterpart=peer, ourpart=account.bare_jid, file_name="file.txt", size=size,
-        provider=FileManager.SFS_PROVIDER_ID
+        provider=provider
     };
-    transfer.sfs_sources.add(new Xmpp.Xep.StatelessFileSharing.HttpSource() { url=url });
+    if (url != "") {
+        transfer.sfs_sources.add(new Xmpp.Xep.StatelessFileSharing.HttpSource() { url=url });
+    }
     return transfer;
 }
 
@@ -171,6 +216,42 @@ private void check_file_transfer_info_index() {
     assert_nonnull(row);
 }
 
+private async void check_unknown_size_limit() throws Error {
+    var manager = app.stream_interactor.get_module(FileManager.IDENTITY);
+    int64 old_limit = manager.max_unknown_size;
+    manager.max_unknown_size = 100 * 1024;
+    manager.add_provider(new EndlessFileProvider(42));
+    var transfer = create_transfer("", -1, 42);
+
+    GLib.Test.expect_message("libdino", LogLevelFlags.LEVEL_WARNING, "*Download exceeds the limit for unknown-size transfers*");
+    yield manager.download_file(transfer);
+    GLib.Test.assert_expected_messages();
+    assert_cmpint(transfer.state, CompareOperator.EQ, FileTransfer.State.FAILED);
+    assert_null(transfer.path);
+
+    var enumerator = File.new_for_path(FileManager.get_storage_dir()).enumerate_children("*", FileQueryInfoFlags.NONE);
+    FileInfo? info;
+    while ((info = enumerator.next_file(null)) != null) {
+        if (info.get_name().has_suffix("endless.bin")) GLib.Test.fail();
+    }
+    manager.max_unknown_size = old_limit;
+}
+
+private async void check_read_timeout() throws Error {
+    var manager = app.stream_interactor.get_module(FileManager.IDENTITY);
+    int old_timeout = manager.read_timeout_seconds;
+    manager.read_timeout_seconds = 1;
+    manager.add_provider(new EndlessFileProvider(43, 1200 * 1000));
+    var transfer = create_transfer("", -1, 43);
+
+    GLib.Test.expect_message("libdino", LogLevelFlags.LEVEL_WARNING, "*Download read timed out after 1 seconds*");
+    yield manager.download_file(transfer);
+    GLib.Test.assert_expected_messages();
+    assert_cmpint(transfer.state, CompareOperator.EQ, FileTransfer.State.FAILED);
+    assert_null(transfer.path);
+    manager.read_timeout_seconds = old_timeout;
+}
+
 private void run_check(int check) {
     var loop = new MainLoop();
     run_check_async.begin(check, (obj, result) => {
@@ -188,6 +269,8 @@ private async void run_check_async(int check) throws Error {
         case 2: yield check_cancel_retry(false); break;
         case 3: yield check_cancel_retry(true); break;
         case 4: yield check_truncated_download(); break;
+        case 5: yield check_unknown_size_limit(); break;
+        case 6: yield check_read_timeout(); break;
     }
 }
 
@@ -206,6 +289,8 @@ int main(string[] args) {
     GLib.Test.add_func("/file-transfers/cancel-retry", () => run_check(2));
     GLib.Test.add_func("/file-transfers/cancel-metadata-retry", () => run_check(3));
     GLib.Test.add_func("/file-transfers/truncated-download", () => run_check(4));
+    GLib.Test.add_func("/file-transfers/unknown-size-limit", () => run_check(5));
+    GLib.Test.add_func("/file-transfers/read-timeout", () => run_check(6));
     GLib.Test.add_func("/file-transfers/query-sql-args", check_query_sql_args);
     GLib.Test.add_func("/file-transfers/info-index", check_file_transfer_info_index);
     GLib.Test.add_func("/file-transfers/account-list-cache", check_account_list_cache);
