@@ -57,7 +57,6 @@ public class ConversationViewController : Object {
 //      goto-end floating button
         var vadjustment = view.conversation_frame.scrolled.vadjustment;
         vadjustment.notify["value"].connect(() => {
-            debug_here();
             bool scrolled_up = vadjustment.value <  vadjustment.upper - vadjustment.page_size;
             view.goto_end_revealer.reveal_child = scrolled_up;
             view.goto_end_revealer.visible = scrolled_up;
