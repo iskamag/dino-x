@@ -19,7 +19,7 @@ private static bool run_gpg(string[] argv) {
 
 private static int count_temp_files() {
     int count = 0;
-    var directory = File.new_for_path(Environment.get_tmp_dir());
+    var directory = File.new_for_path(test_dir);
     try {
         var enumerator = directory.enumerate_children("standard::name", FileQueryInfoFlags.NONE);
         FileInfo? info;
@@ -57,6 +57,14 @@ private void test_file_roundtrip() {
         assert_cmpint((int) encrypted_size, CompareOperator.GT, 0);
 
         int temp_files_before = count_temp_files();
+        // Make sure temporary files really land in test_dir; otherwise the
+        // leak assertion below would silently count the wrong directory.
+        GLib.FileIOStream probe_stream;
+        File probe = File.new_tmp("dino-pgp-probe-XXXXXX", out probe_stream);
+        probe_stream.close(null);
+        assert_cmpint(count_temp_files(), CompareOperator.EQ, temp_files_before + 1);
+        probe.delete(null);
+        assert_cmpint(count_temp_files(), CompareOperator.EQ, temp_files_before);
         var encrypted_stream = File.new_for_path(encrypted_path).read(null);
         var decryptor = new PgpFileDecryptor();
         var transfer = new FileTransfer() {
@@ -104,7 +112,12 @@ private void test_file_roundtrip() {
 int main(string[] args) {
     GLib.Test.init(ref args);
     try {
-        test_dir = DirUtils.make_tmp("dino-openpgp-file-tests-XXXXXX");
+        // Keep temporary files separate from other test processes; count_temp_files()
+        // must not observe another process' dino-pgp-* files.
+        string? dir = DirUtils.mkdtemp(Path.build_filename(Environment.get_current_dir(), "openpgp-file-tests-XXXXXX"));
+        if (dir == null) throw new FileError.FAILED("Could not create test directory");
+        test_dir = (!)dir;
+        Environment.set_variable("TMPDIR", test_dir, true);
     } catch (Error e) {
         stderr.printf("%s\n", e.message);
         return 1;

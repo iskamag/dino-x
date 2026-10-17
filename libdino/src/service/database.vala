@@ -724,7 +724,11 @@ public class Database : Qlite.Database {
     }
 
     public ArrayList<Account> get_accounts() {
-        if (account_list_cache != null) return (!)account_list_cache;
+        if (account_list_cache != null) {
+            var ret = new ArrayList<Account>(Account.equals_func);
+            ret.add_all((!)account_list_cache);
+            return ret;
+        }
 
         ArrayList<Account> ret = new ArrayList<Account>(Account.equals_func);
         foreach(Row row in account.select()) {
