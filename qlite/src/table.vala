@@ -133,7 +133,7 @@ public class Table {
 
     public QueryBuilder select_by_ids(Column<int> id_column, Gee.Collection<int> ids) {
         ensure_init();
-        QueryBuilder builder = select().from(this);
+        QueryBuilder builder = select();
         if (ids.is_empty) return builder.where("0");
         var placeholders = new StringBuilder();
         string[] args = new string[ids.size];
